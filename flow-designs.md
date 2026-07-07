@@ -1,5 +1,81 @@
 # Flow Designs
 
+## 0. Source Data Pipeline (Client Files → Access → CSV Export)
+
+Upstream of every Mule flow in this file: how the client's raw data becomes the CSVs the flows actually read. Two distinct legs, in and out of Access — don't conflate their formats:
+
+### Incoming leg — client files → Access
+The client's **initial** data delivery (covering all work units — Jewelry, Petroleum, BiWeekly) was one `.xlsx` file per source table, each with a header row. **Going forward**, incoming files arrive as **`.unl`, pipe-delimited, no header row** instead — same column shape as the originals otherwise. This only affects how these files get imported into Access; it does not touch the Mule-facing CSVs (see outgoing leg below).
+
+Since the `.unl` files have no header row, importing them requires a reheadering step:
+1. ~~Open the `.unl` file in Excel (pipe-delimited).~~
+2. ~~Add the column names back, matching the original (headered) source file for that table.~~
+3. ~~Add a `SourceFileType` column, hardcoded per source file (not derived from any column in the data) — e.g. `"Current"` for `LaborStd`, `"Historical"` for `LaborStdHis`.~~
+4. ~~Save as `.xlsx`.~~
+
+Steps 1-4 (manual Excel reheadering) are superseded for LaborStd by the **`ImportSourceData`** Mule flow — see subsection below. It reads the raw pipe-delimited files directly, assigns column names positionally, adds `SourceFileType`, and writes the combined `.xlsx` itself. This is what section 2 refers to as the `SourceFileType` column distinguishing merged Current/Historical records once these land in the combined `LaborStd`/`LaborAR` Access tables.
+
+5. Import the resulting `.xlsx` into a **`_raw` staging table** (e.g. `LaborStd_raw`), not the final table directly — the final table (e.g. `LaborStd`) has an AutoNumber (counter) primary key field, which a direct import can't populate/reconcile against.
+6. Run an append query to copy rows from the `_raw` staging table into the final table (e.g. `LaborStd_raw` → `LaborStd`), letting Access assign the AutoNumber key as rows are appended.
+
+### `ImportSourceData` flow — automated reheadering (LaborStd)
+Reads the two raw pipe-delimited LaborStd files, tags each with the right `SourceFileType`, combines them, and writes one `.xlsx` — replacing manual steps 1-4 above.
+
+**Source files** (pipe-delimited, no header row):
+| File | SourceFileType |
+|---|---|
+| `laborstd.txt` | `Current` |
+| `his_lab.txt` | `Historical` |
+
+**Column order** — same 30 columns as the `labor_std.csv` Column Reference in section 2 (Index 1-30, `fein` → `batchid`), minus `id` (Access-assigned AutoNumber, not present in the raw file) and minus `SourceFileType` (added by this flow, not present in the raw file).
+
+**Trigger**: `On New or Updated File`, same pattern as `LoadReadyFlag.csv` in section 2 — an Access form button writes a sentinel file once `laborstd.txt`/`his_lab.txt` are both in place, and that arrival starts the flow. Simpler for you to fire from an Access button than an HTTP call.
+
+### On New or Updated File Settings
+- Directory: `C:\data\`
+- File Name Pattern (Matcher): `SourceDataReadyFlag.csv`
+- Min Size: `1` (same reason as `LoadReadyFlag.csv` — `0` only picks up empty files; the flag file needs at least a byte of real content, e.g. a timestamp, not a zero-byte touch file)
+- Polling interval: `10` seconds
+
+Since the trigger event's payload is `SourceDataReadyFlag.csv` itself, not the data files, the flow starts with explicit **File Read** operations for both `.txt` files rather than relying on the trigger payload (same reasoning as `LoadReadyFlag.csv` in section 2).
+
+**File paths** — everything in the same `C:\data\` folder the Salesforce load flow already polls (no conflict: the load flow's poller only matches `LaborStd.csv`/`LaborAR.csv`/`LoadReadyFlag.csv`/`AccountDeletes.csv` by exact name, and `.txt`/`.xlsx`/`SourceDataReadyFlag.csv` here don't collide with those):
+- Read: `C:\data\laborstd.txt`, `C:\data\his_lab.txt`
+- Write: `C:\data\LaborStd.xlsx`
+
+**Flow Structure (Studio build steps):**
+```
+Flow: ImportSourceData
+On New or Updated File (C:\data\, SourceDataReadyFlag.csv)
+
+File Read (Path: C:\data\laborstd.txt)
+  Input MIME type: application/csv
+  Reader properties: separator = "|", header = false
+  → Set Variable: sourceFileType = "Current"
+  → Transform Message (transform-laborstd-raw-name.dwl — assigns the 30 column names positionally via `row pluck $`, since header:false means the reader's own field keys can't be relied on; appends SourceFileType from vars.sourceFileType)
+  → Set Variable: currentRows = payload
+
+File Read (Path: C:\data\his_lab.txt)
+  Same Input MIME type / reader properties as above
+  → Set Variable: sourceFileType = "Historical"
+  → Transform Message (transform-laborstd-raw-name.dwl — same transform, reused; SourceFileType comes out "Historical" this time since it reads vars.sourceFileType)
+  → Set Variable: historicalRows = payload
+
+Transform Message (transform-laborstd-combine-export.dwl — vars.currentRows ++ vars.historicalRows, output application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+File Write (Path: C:\data\LaborStd.xlsx)
+```
+
+**Needs verification in Studio**: the `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (xlsx) output mimeType/writer hasn't been confirmed against this specific Studio/Mule runtime version yet — check the Transform Message's output metadata format picker for the exact Excel writer format it exposes, and adjust `transform-laborstd-combine-export.dwl`'s `output` directive to match if different. Also confirm the CSV reader's "separator" property field accepts `|` directly in this Studio version (7.21) — some connector versions expect it under a differently-labeled reader property.
+
+### Combine + Load Process (per work unit)
+1. Current and historical datasets for a given table (e.g. `LaborStd` + `HisLaborStd`) are combined and loaded into Access, with `SourceFileType` (`Current` or `Historical`) set per source table as part of the load.
+
+### Outgoing leg — Access → Mule flow folder
+2. An Access form has one **export button per work unit** (currently only Jewelry exists) that dumps the relevant tables to **CSV** (unchanged format — still comma-delimited with a header row, matching section 2's Reader Configuration) in the folder the Anypoint flow polls. For Jewelry, the button exports `LaborStd.csv`, then `LaborAR.csv`, then the `LoadReadyFlag.csv` sentinel last (order matters — see section 2's Trigger File notes on why the flag file is written only once both data files are fully in place).
+3. A separate button on the same form generates `AccountDeletes.csv` (see section 1). The delete flow's Salesforce-side logic is generic across work units — only the Access query that produces the company-name list changes. Currently there's one button/query; **planned improvement**: split into one button + one query per work unit (Jewelry/Petroleum/BiWeekly) rather than one query that has to be edited per run, to make testing each work unit independently easier.
+
+---
+
 ## 1. Delete Flow — Remove Records by Company Name
 
 Reads a CSV of company names and deletes all related Salesforce records in the correct order (children before parents).
@@ -584,6 +660,20 @@ Key difference: there's an additional source file listing **vehicles**, which ad
 - `transform-location.dwl` — `Description: "Jewelry " ++ name ++ " Address for Job No " ++ jobno` → change `"Jewelry"` to `"Petroleum"`
 - `transform-bla.dwl` — `Trade__c: "Labor Standards"` → needs whatever Trade__c value applies to Petroleum (business decision, not yet known)
 - `transform-bla.dwl` — `AmountPaid` hardcoded to `0` for Jewelry; the original formula (`if ((vars.row.tot_pymt default "") != "") vars.row.tot_pymt as Number else null`) is kept as a comment in the file — confirm with the business whether Petroleum should use the real formula instead of hardcoding
+
+---
+
+## 7. Next Work Unit: BiWeekly (Planned)
+
+Same target objects as Jewelry: Account, Location/Address, Contact, BLA, Business License, Assessment/AQR, Invoice__c/InvoiceLine__c, Payment__c, Account_Status__c. Source data is **a single input file**, confirmed **one row per job** (not one row per invoice/deposit like `LaborAR.csv`).
+
+**Key simplification vs. Jewelry**: Jewelry needs two files joined by jobno (`LaborStd.csv` for Account/Location/BLA, `LaborAR.csv` for Invoice__c/Payment__c) because a job can have multiple AR rows (e.g. several same-day deposits), so Invoice/Payment had to loop over the AR file separately from the account-level `For Each`, joined via `blaJobnoLog`. Since BiWeekly is one row per job, there's no join needed — Account/Location/BLA/Business License/Assessment/AQR/Invoice__c/InvoiceLine__c/Payment__c/Account_Status__c can all be created directly inside a single per-row `For Each`, no `blaJobnoLog`, no separate `AddInvoices` pass over a second file.
+
+Same simplification applies to Account_Status__c: Jewelry's `transform-account-status.dwl` finds the **oldest** `deposit_date` across potentially several matching `vars.arRows` for a jobno (see section 5). With one row per job, `Effective_Date__c` is just that row's own `deposit_date` directly — no `vars.arRows` pre-parse, no `filter`/`orderBy`.
+
+### Open questions
+- Does BiWeekly need the Sent Invoice cutover logic (`AddSentInvoice`, section 4)? Default assumption is **no** — same reasoning as Petroleum (section 6): that's a one-time Jewelry-specific cutover, not carried forward unless told otherwise.
+- Actual source file layout / column names not yet known — needed before building the transforms.
 
 ---
 
