@@ -34,7 +34,7 @@ var stateNames = {
 }
 ---
 {
-    RecordTypeId: "012cx000akA",
+    RecordTypeId: vars.accountRecordTypeId,
     Federal_Tax_ID__c: fixFein(vars.row.fein default ""),
     Name: vars.row.name,
     DBA_Name__c: vars.row.company,

@@ -29,6 +29,6 @@ var expirationDateTime =
     PeriodEnd: expirationDateTime,
     Expiration_Date__c: expirationDateTime,
     RegulatoryAuthorizationTypeId: vars.licenseTypeId,
-    Status: if ((vars.row.SourceFileType default "") == "Current") "Verified" else "Inactive",
+    Status: if ((vars.row.SourceFileType default "") == "Current") "Active" else "Inactive",
     Legacy_License_Number__c: jobno,
 }

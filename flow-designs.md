@@ -36,7 +36,9 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
 3. Invoice__c
 4. Address__c (child of Location via Address__c.ParentId)
 5. Location (TODO: add to delete flow)
-6. (Account deletion TBD)
+6. Account_Status__c (child of Account via Account_Status__c.Account__c) — added to delete flow
+7. Entity_Identifier__c (child of Account) — added to delete flow. Not created by the Mule load flow at all — it's auto-created by a Salesforce trigger (off Account creation, presumably), so it never appeared anywhere in the load design, but still needs cleanup on delete since it's still a real child record of Account
+8. (Account deletion TBD)
 
 ### Key Notes
 - Use **Set Variable** immediately after each Salesforce Query to save IDs — the payload is overwritten by the next operation
@@ -115,14 +117,24 @@ The combined flow is implemented as a main flow calling out to named sub-flows v
 | Sub-Flow | Responsibility |
 |---|---|
 | `InitAssessmentQuestionVersion` | Runs once (not per-row) — builds `vars.aqvMap`, the AssessmentQuestionVersion lookup used later by Assessment Question Response (`transform-aqv-lookup.dwl`) |
-| `AddAccount` | Salesforce Create Account, Result & Log Pattern; sets `accountId` |
+| `InitAccountRecordType` | Runs once (not per-row) — queries the Account Record Type Id by `DeveloperName` (stable across sandbox refreshes, unlike a hardcoded Id) and sets `vars.accountRecordTypeId`, used by `transform2-account.dwl` |
+| `AddAccount` | Salesforce Create Account, Result & Log Pattern; sets `accountId`. If `accountId != null`, also Choice-gated creates one Account_Status__c (filters the pre-parsed `vars.arRows` to this row's jobno, takes the oldest `deposit_date` — see section 5) |
 | `AddLocationsAndAddresses` | Location(s) → per-location Choice-gated Address__c → PartyAddress__c (see Flow Structure below) |
 | `AddContacts` | Contact list create (0-4), List Result & Log Pattern; independent, no gating |
 | `AddBusinessLicenseApp` | BLA → Choice-gated Business License / Assessment / Assessment Question Response chain; sets `blaId`, appends to `blaJobnoLog` |
 | `AddSentInvoice` | Called **after `AddInvoices` completes**, once per Current-sourced BLA (`blaJobnoLog` filtered on `sourceFileType == "Current"`) — must run last so the Salesforce trigger marks this as the "Active" invoice on the BLA. Creates one Invoice__c (`InvoiceStatus__c: "Sent"`) + InvoiceLine__c per cutover account, no Payment__c (see section 4) |
 | `AddInvoices` | Invoice Load — called once, processing `LaborAR.csv` rows via `vars.blaJobnoLog` lookup → Invoice__c → Choice-gated InvoiceLine__c/Payment__c (see section 3) |
 
-`InitAssessmentQuestionVersion` runs once at the start of the flow (before the labor_std `For Each`); the other sub-flows are called per-row (or, for `AddInvoices`, per-file) from within the relevant loop.
+`InitAssessmentQuestionVersion` and `InitAccountRecordType` both run once at the start of the flow (before the labor_std `For Each`); the other sub-flows are called per-row (or, for `AddInvoices`, per-file) from within the relevant loop.
+
+### InitAccountRecordType (sub-flow body)
+```
+Salesforce Query: SELECT Id FROM RecordType WHERE SobjectType = 'Account' AND DeveloperName = 'Business_Account'
+Set Variable: accountRecordTypeId = #[payload[0].Id]
+```
+`DeveloperName` is a fixed constant known at design time (not row data), so it's embedded directly in the query text rather than bound as a parameter — the "never manually quote a bind parameter" rule (see Key Notes in section 1) only applies to values built from row/user data, not literals like this.
+
+**Why this exists**: a hardcoded `RecordTypeId` broke after a sandbox refresh (refreshes regenerate Salesforce record Ids). `DeveloperName` stays stable across refreshes, so querying by it once at flow start makes the flow resilient — same reasoning as `InitAssessmentQuestionVersion`.
 
 ### Mailing / Physical Location Rule
 If `add1` and `add2` are both non-null and one of them contains "PO Box", that one is the **Mailing** address and the other is the **Physical** address — two Location records are created (`transform-location.dwl`: `Name` = `"Mailing"` / `"Physical Location"`). Otherwise, a single `"Mailing"` Location is created covering the whole address.
@@ -227,12 +239,20 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
   → File Read: C:\data\LaborStd.csv
   → Transform Message (transform1-filter-and-name.dwl — operates directly on payload straight from the Read, no intermediate raw variable; CSV → Java, header: true; filters invalid rows and cleans jobno, columns already named from header)
   → Set Variable: laborStdRows = #[payload]
-  → File Read: C:\data\LaborAR.csv → Set Variable: laborArRaw = payload
+  → File Read: C:\data\LaborAR.csv
+  → Transform Message (transform-ar-filter-and-name.dwl — operates directly on payload straight from the Read, no intermediate raw variable, same pattern as LaborStd.csv above; filters invalid rows, cleans jobno, sorts by deposit_date ascending)
+  → Set Variable: arRows = #[payload] (reused by both AddAccount, per-row filtered by jobno, and AddInvoices, iterated whole — parsing once here instead of twice)
   → Flow Reference: InitAssessmentQuestionVersion (runs once — sets vars.aqvMap)
+  → Flow Reference: InitAccountRecordType (runs once — sets vars.accountRecordTypeId)
   → For Each row: (Collection: #[vars.laborStdRows])
       → Set Variable: row = #[payload] (Mule's For Each has no built-in per-item variable — the current item IS payload for that iteration, so this converts it into vars.row for everything downstream to reference)
       → Flow Reference: AddAccount
           → Salesforce Create Account (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "Account"]
+          → Choice
+              When #[vars.accountId != null]:
+                  → Transform Message (transform-account-status.dwl — filters the pre-parsed vars.arRows to rows matching vars.row.jobno, takes the oldest deposit_date among them; see section 5)
+                  → Salesforce Create Account_Status__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "Account_Status__c"]
+              Otherwise: (skip — Account failed, Account_Status__c not attempted)
       → Flow Reference: AddLocationsAndAddresses
           → Transform Message: build location array (transform-location.dwl — 1 or 2 items)
           → Set Variable: locationList = payload   (save before Create overwrites it)
@@ -266,7 +286,7 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
               Otherwise: (skip — BLA failed, BL/Assessment/AQR not attempted)
   → File Write: C:\data\bla_jobno_map.csv (overwrite, content = vars.blaJobnoLog as CSV — debug/audit artifact; the labor_ar join below uses vars.blaJobnoLog directly in memory, no read-back needed)
 
-  → Flow Reference: AddInvoices, input = vars.laborArRaw
+  → Flow Reference: AddInvoices (no input needed — reads vars.arRows directly)
       (see "3. Invoice Load" below for what AddInvoices does — For Each row over the given raw CSV, join to vars.blaJobnoLog by jobno, Choice-gated Invoice__c → InvoiceLine__c/Payment__c)
 
   → Flow Reference: AddSentInvoice (see section 4 — self-contained: filters vars.blaJobnoLog to Current-sourced accounts and loops internally, creating Invoice__c "Sent" + InvoiceLine__c per account, no Payment__c)
@@ -296,6 +316,8 @@ Invoice data (`LaborAR.csv`) is keyed by jobno but needs the Salesforce BLA Id t
 The Invoice Load (below) references `vars.blaJobnoLog` directly and joins on jobno.
 
 ### TODO
+- ~~Delete Account_Status__c in the RemoveAccounts (Delete) flow~~ — done, and Entity_Identifier__c (a trigger-created child of Account, not part of the load flow) added alongside it. See Delete Order in section 1, items 6-7.
+- **Implement invoice date ordering in Studio** — designed (see Load Order under section 3: `transform-ar-filter-and-name.dwl`'s `orderBy` on `deposit_date`, oldest first), but not yet built/applied in the actual Studio project.
 - **Go back and apply the Result & Log Pattern to the other subflows in Studio** — `AddInvoices` is getting it built-in now; `AddAccount`, `AddLocationsAndAddresses`, `AddContacts`, `AddBusinessLicenseApp` were built earlier and need to be revisited to confirm every Salesforce Create in them actually has the extract-result + `logEntries` append steps wired up, matching what's documented in Flow Structure above (design is correct in the doc — needs verifying against the actual Studio build).
 - Build the Invoice Load Flow (see below) using `vars.blaJobnoLog` (in-memory, same flow execution — see Trigger File section above)
 - **Interim reconciliation logging (current plan)**: write `import_log.csv` via the Result & Log Pattern (see above), then import into the Postgres `import_log` table using pgAdmin's **Import/Export Data** tool (right-click table → Import, point at the CSV, header: yes, map columns to jobno/object/status/salesforce_id/error_code/error_message, leave id/logged_at unmapped). This works entirely through pgAdmin's existing connection — no Mule Database connector or JDBC driver required, so it's unaffected by the Maven/PKIX blocker below.
@@ -313,10 +335,13 @@ The Invoice Load (below) references `vars.blaJobnoLog` directly and joins on job
 
 ## 3. Invoice Load — `AddInvoices` sub-flow
 
-Loads Invoice__c / InvoiceLine__c / Payment__c from `LaborAR.csv`, joined to the BLA Id captured during the labor_std portion of the same flow execution (see "2. Combined Load Flow" above — triggered once by `LoadReadyFlag.csv`). Called once via Flow Reference, passing `vars.laborArRaw` as input (see Sub-Flow Architecture above).
+Loads Invoice__c / InvoiceLine__c / Payment__c from `LaborAR.csv`, joined to the BLA Id captured during the labor_std portion of the same flow execution (see "2. Combined Load Flow" above — triggered once by `LoadReadyFlag.csv`). Called once via Flow Reference, no input needed — reads `vars.arRows`, which is parsed once upfront in the main flow (see Sub-Flow Architecture above and section 2's Flow Structure).
 
 ### Grain
 Confirmed: **1 row = 1 Invoice__c = 1 InvoiceLine__c = 1 Payment__c.** `jobno` is not unique within `LaborAR.csv` — the same job can have multiple invoices (e.g. job `1996350007` has 4 same-day deposits, see `dev-questions.md` #5) — but that doesn't change the grain, it just means the jobno→blaId/accountId lookup can match multiple rows to the same BLA, which is expected.
+
+### Load Order
+Invoices load oldest-first, sorted by `deposit_date` (not the pymt_type-derived date) — added as an `orderBy` at the end of `transform-ar-filter-and-name.dwl`'s filter/map chain: `orderBy (row) -> ... row.deposit_date as Date {format: "M/d/yyyy"} ...`. Rows with a blank `deposit_date` sort to the very front (fallback key `|0001-01-01|`) rather than throwing on the `Date` coercion — worth spot-checking during testing whether any rows actually hit that fallback, since it'd mean bad/missing data rather than a real oldest invoice. The `filter`→`map` chain is wrapped in its own parens before `orderBy` is chained on, same defensive pattern as the `filter`/`map` entanglement gotcha in the DataWeave Reference section.
 
 ### pymt_type Discriminator
 `pymt_type` selects which set of payment-method fields is populated, and drives multiple downstream field values:
@@ -331,6 +356,8 @@ Confirmed: **1 row = 1 Invoice__c = 1 InvoiceLine__c = 1 Payment__c.** `jobno` i
 `LaborAR.csv` date fields (`check_date`, `cash_pymt_date`, `mo_ord_date`, `deposit_date`) come through as `M/d/yyyy` — non-padded month/day (e.g. `1/1/2026`, `10/1/2025`, `1/10/2025`) — **not** `MM/dd/yyyy` like `labor_std.csv`'s `issue_date`. Root cause: these Access columns were originally typed as Date/Time, which appended a `0:00:00` time component on CSV export (caused a real coercion error: `Text '8/23/2016 0:00:00'` failing against `MM/dd/yyyy`); fixed at the source by retyping the Access columns to Short Text before export, so the time component is gone but the month/day are still non-padded. All date parsing in `transform-invoice.dwl` and `transform-payment.dwl` uses `Date {format: "M/d/yyyy"}` accordingly — don't copy the `MM/dd/yyyy` pattern from the labor_std transforms into new AR-side code, and if a future Access export re-adds Date/Time typing, watch for this same issue resurfacing.
 
 **Output type — `Date`, not `String`.** `DueDate__c`/`InvoiceDate__c`/`PaymentDate__c`/`ReceiptDate__c` are Salesforce **Date** fields, and the connector rejects a `String` even when it's valid ISO format (`"2016-08-23"`) — confirmed via a real error: `value not of required type: 2016-08-23`. Fix: stop at `... as Date {format: "M/d/yyyy"}` and do **not** chain a further `as String {format: "yyyy-MM-dd"}` — leave the value as DataWeave's `Date` type and let the connector serialize it. This is different from the DateTime fields elsewhere in the project (BLA's `AppliedDate`, Assessment's `EffectiveDateTime`), which need a full ISO8601 `String` with a time/timezone component, not a bare `Date`.
+
+**Recurring pattern — Access numeric columns export with a trailing `.00`.** Same root cause as the `jobno` decimal artifact (`transform1-filter-and-name.dwl`/`transform-ar-filter-and-name.dwl`), hit a second time on `Payment__c.ReferenceNumber__c` (sourced from `cash_recpt_no`/`mo_ord_no`, both Access numeric columns). Fix is the same each time: `(value default "" splitBy ".")[0]` to strip everything after the decimal point. Check any *other* field sourced from a numeric-typed Access column for this before assuming it's clean — it's cheap to apply defensively even where it turns out to be a no-op.
 
 ### Field Mapping
 
@@ -364,12 +391,12 @@ Confirmed: **1 row = 1 Invoice__c = 1 InvoiceLine__c = 1 Payment__c.** `jobno` i
 | Payment_Method__c | per pymt_type table above |
 | Payment_Status__c | hardcoded `"Completed"` |
 | ReceiptDate__c | `deposit_date`, parsed to DataWeave `Date` type (same as PaymentDate__c) |
-| ReferenceNumber__c | reference # field per pymt_type table above |
+| ReferenceNumber__c | reference # field per pymt_type table above, decimal-stripped (`.00` artifact — see Date Format section's numeric-column note) |
 
 ### Flow Structure (`AddInvoices` sub-flow body)
+No re-parse needed here — `vars.arRows` was already computed once upfront (see section 2's Flow Structure), already filtered/cleaned/sorted oldest-first. `AddInvoices` just iterates over it directly:
 ```
-Transform Message (transform-ar-filter-and-name.dwl — reads `vars.laborArRaw` directly, no need to copy it into `payload` first since flow variables persist across the Flow Reference call; columns already named via CSV header, so this just filters invalid rows and cleans up `jobno`). If Studio's static type checker flags an unresolved-return-type error on the `filter` here, redefine input metadata on `laborArRaw` in this Transform Message's Input panel (CSV format, header **checked**, matching the source's actual header row) — metadata often doesn't propagate across a Flow Reference boundary even though the actual value does.
-For Each row:
+For Each (Collection: #[vars.arRows]):
       → Set Variable: row = #[payload] (Mule's For Each has no built-in per-item variable — see note in section 2's Flow Structure)
       → Transform Message (transform-ar-lookup.dwl — finds {jobno, blaId, accountId} from vars.blaJobnoLog by jobno; {} if no match)
       → Set Variable: blaAccountLookup = payload
@@ -452,8 +479,8 @@ To make this possible, `blaJobnoLog` entries now also capture `sourceFileType` (
 **Invoice__c** (`transform-sent-invoice.dwl`) — all hardcoded except the two lookup Ids:
 | Field | Source |
 |---|---|
-| Account__c | `vars.accountId` (from the filtered `blaJobnoLog` entry) |
-| BusinessLicenseApplication__c | `vars.blaId` (from the filtered `blaJobnoLog` entry) |
+| Account__c | `vars.row.accountId` (from the filtered `blaJobnoLog` entry) |
+| BusinessLicenseApplication__c | `vars.row.blaId` (from the filtered `blaJobnoLog` entry) |
 | DueDate__c | hardcoded `9/30/2026` |
 | InvoiceDate__c | hardcoded `8/1/2026` |
 | InvoiceStatus__c | hardcoded `"Sent"` |
@@ -478,9 +505,7 @@ Transform Message: filter blaJobnoLog to Current-sourced accounts only
     #[vars.blaJobnoLog filter (entry) -> entry.sourceFileType == "Current"]
 Set Variable: currentAccounts = payload
 For Each (Collection: #[vars.currentAccounts]):
-    Set Variable: row = #[payload] (row = {jobno, blaId, accountId, sourceFileType} — not a labor_std CSV row)
-    Set Variable: blaId = #[vars.row.blaId]
-    Set Variable: accountId = #[vars.row.accountId]
+    Set Variable: row = #[payload] (row = {jobno, blaId, accountId, sourceFileType} — not a labor_std CSV row; no need for separate blaId/accountId Set Variables, transform-sent-invoice.dwl reads vars.row.blaId/vars.row.accountId directly)
     Transform Message (transform-sent-invoice.dwl)
     Salesforce Create Invoice__c (Records: #[[payload]])
     Transform Message: extract result (single-item Result & Log Pattern)
@@ -501,13 +526,64 @@ Uses `sentInvoiceId`/`sentInvoiceResult` (not `invoiceId`/`invoiceResult`) to av
 
 ---
 
-## 5. Next Work Unit: Petroleum (Planned)
+## 5. Account Status — nested inside `AddAccount`
+
+New object: `Account_Status__c`. One record per account, not per invoice — `Effective_Date__c` is the **oldest** `deposit_date` across all of that account's `LaborAR.csv` rows (an account can have multiple AR rows, e.g. installment payments).
+
+### Design choice: nested in `AddAccount`, not a separate post-`AddInvoices` sub-flow
+Originally designed as a separate `AddAccountStatus` sub-flow that ran after `AddInvoices` completed. Revised to instead live directly inside `AddAccount`, gated on `vars.accountId != null`, because `vars.laborArRaw` is read before any inserts (including Account) — so the data's already available at Account-creation time, in the same per-row loop, no separate post-processing pass needed.
+
+Initially this meant re-parsing `laborArRaw` from scratch inside the transform on every single account (O(rows × accounts)) — simple, but wasteful. Revised again: `vars.arRows` (filter/clean/sort) is now computed **once, upfront**, right after `LaborAR.csv` is read (see section 2's Flow Structure), before the main labor_std `For Each` even starts. Both `AddAccount` (filtered to one jobno) and `AddInvoices` (iterated whole) now just reuse that one pre-parsed `vars.arRows` — no re-parsing anywhere.
+
+### Field Mapping (`transform-account-status.dwl`)
+| Field | Source |
+|---|---|
+| Account__c | `vars.accountId` |
+| Effective_Date__c | oldest `deposit_date` among `vars.arRows` matching `vars.row.jobno`, parsed to DataWeave `Date` type (same `Date`-not-`String` rule as Invoice__c/Payment__c date fields); `null` if no matching AR rows |
+| Status__c | hardcoded `"Active"` for all |
+
+### `transform-account-status.dwl`
+```
+%dw 2.0
+output application/java
+
+var matchingRows = vars.arRows filter (row) -> row.jobno == vars.row.jobno
+
+var oldestDepositDate = if (sizeOf(matchingRows) > 0)
+    (matchingRows orderBy (row) -> row.deposit_date as Date {format: "M/d/yyyy"})[0].deposit_date
+  else null
+---
+{
+    Account__c: vars.accountId,
+    Effective_Date__c: if ((oldestDepositDate default "") != "") oldestDepositDate as Date {format: "M/d/yyyy"} else null,
+    Status__c: "Active"
+}
+```
+
+### Flow Structure (nested in `AddAccount`, see section 2's Flow Structure for full context)
+```
+Salesforce Create Account (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "Account"]
+Choice
+    When #[vars.accountId != null]:
+        Transform Message (transform-account-status.dwl)
+        Salesforce Create Account_Status__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "Account_Status__c"]
+    Otherwise: (skip — Account failed, Account_Status__c not attempted)
+```
+
+---
+
+## 6. Next Work Unit: Petroleum (Planned)
 
 Source data is very similar to Jewelry — plan is to copy this entire flow file as the starting point rather than build from scratch.
 
 Key difference: there's an additional source file listing **vehicles**, which adds data to a couple of the Assessment Question Responses. Unlike the Jewelry AQR transform (`transform-assessment-question-response.dwl`), which maps a fixed static list of 7 questions, Petroleum's AQR will need to handle **per-vehicle repetition** for whichever questions the vehicle data feeds — similar in shape to how Contacts handle "up to 4" respparty entries (`transform-contact.dwl`), not a fixed-count list. Will need its own File Read for the vehicles file and a modified/branched version of the AQR transform when that work starts.
 
 **Do not carry over `AddSentInvoice`** (section 4) — that's a one-time Jewelry cutover requirement (old-system invoices with no AR payment record), not a general pattern. Strip it, its Flow Reference call, the `blaJobnoLog`-filter-to-Current step, and `transform-sent-invoice.dwl`/`transform-sent-invoiceline.dwl` out of the copied flow before building Petroleum.
+
+**Hardcoded Jewelry-specific literals to update** when copying (found by grepping the transforms for `Jewelry`/`Labor Standards` — worth re-checking for other work-unit-specific values too, this may not be exhaustive):
+- `transform-location.dwl` — `Description: "Jewelry " ++ name ++ " Address for Job No " ++ jobno` → change `"Jewelry"` to `"Petroleum"`
+- `transform-bla.dwl` — `Trade__c: "Labor Standards"` → needs whatever Trade__c value applies to Petroleum (business decision, not yet known)
+- `transform-bla.dwl` — `AmountPaid` hardcoded to `0` for Jewelry; the original formula (`if ((vars.row.tot_pymt default "") != "") vars.row.tot_pymt as Number else null`) is kept as a comment in the file — confirm with the business whether Petroleum should use the real formula instead of hardcoding
 
 ---
 

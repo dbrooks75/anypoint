@@ -12,7 +12,8 @@ var issueDateTime =
 {
     AccountId: vars.accountId,
     ApplicationType: if (jobno[-2 to -1] == "01") "New" else "Renewal",
-    AmountPaid: if ((vars.row.tot_pymt default "") != "") vars.row.tot_pymt as Number else null,
+    // Jewelry: hardcoded to 0. Original formula: if ((vars.row.tot_pymt default "") != "") vars.row.tot_pymt as Number else null
+    AmountPaid: 0,
     Status: "Approved",
     AppliedDate: issueDateTime,
     Category: "License",

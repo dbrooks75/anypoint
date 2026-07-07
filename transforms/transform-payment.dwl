@@ -10,9 +10,9 @@ var paymentMethod =
     else null
 
 var referenceNumber =
-    if (pymtType == "K") vars.row.check_no
-    else if (pymtType == "C") vars.row.cash_recpt_no
-    else if (pymtType == "M") vars.row.mo_ord_no
+    if (pymtType == "K") (vars.row.check_no default "" splitBy ".")[0]
+    else if (pymtType == "C") (vars.row.cash_recpt_no default "" splitBy ".")[0]
+    else if (pymtType == "M") (vars.row.mo_ord_no default "" splitBy ".")[0]
     else null
 
 var paymentDate =

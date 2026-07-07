@@ -5,8 +5,8 @@ var aqvList = vars.aqvMap
 var questions = [
     {name: "Date App Received",          responseType: "Date"},
     {name: "Homework-Names-Address",     responseType: "Text Area"},
-    {name: "Homework",                   responseType: "Text Area"},
-    {name: "Type of Contract Work",      responseType: "Text Area"},
+    {name: "Homework",                   responseType: "Radio"},
+    {name: "Type of Contract Work",      responseType: "Multiselect"},
     {name: "Operated Address",           responseType: "Text Area"},
     {name: "Operated at Another Address",responseType: "Text Area"},
     {name: "Busness Hours",              responseType: "Text Area"}
@@ -19,7 +19,6 @@ questions map (q) -> do {
         AssessmentId: vars.assessmentId,
         AssessmentQuestionId: aqv.Id,
         Name: aqv.QuestionText,
-        ResponseType: q.responseType,
         CurrencyValue: null,
         DateValue: null,
         IntegerResponseValue: null,
