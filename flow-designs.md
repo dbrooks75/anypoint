@@ -672,15 +672,15 @@ Own sentinel file, separate from Jewelry's (see TODO in section 2 to rename Jewe
 On New or Updated File (C:\data\, LoadReadyFlagPetroleum.csv)
 
 File Read (Path: C:\data\MercStd.csv)
-  → Transform Message (transform-filter-and-name-petroleum.dwl — same quirks as LaborStd.csv:
-    filters rows with an invalid jobno, strips Access's ".0" decimal suffix off jobno and
-    licenseno, renames the source "ID" column to lowercase "id")
+  → Transform Message (transform-filter-and-name-petroleum.dwl — filters rows with an invalid
+    jobno, strips Access's ".0" decimal suffix off jobno and licenseno, same quirk as
+    LaborStd.csv — but unlike LaborStd.csv, neither MercStd.csv nor MercAR.csv has an "ID"
+    column, so there's no rename step here)
   → Set Variable: mercStdRows = #[payload]
 
 File Read (Path: C:\data\MercAR.csv)
   → Transform Message (transform-ar-filter-and-name-petroleum.dwl — same quirks as LaborAR.csv:
-    filters/cleans jobno and licenseno the same way, sorts by deposit_date ascending; no "ID"
-    rename, matching LaborAR.csv's transform which doesn't have that column)
+    filters/cleans jobno and licenseno the same way, sorts by deposit_date ascending)
   → Set Variable: arRows = #[payload] (same var name as Jewelry's vars.arRows — already referenced
     by transform-bla-petroleum.dwl's AmountPaid lookup)
 ```
