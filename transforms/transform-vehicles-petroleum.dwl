@@ -8,12 +8,14 @@ var truckRow = (vars.truckRows filter (row) -> (row.licenseno default "") == lic
 
 // Slot columns have no leading zero (truck_make1 .. truck_make56), continuous across
 // TruckReg01/TruckHis01 (1-39) and TruckReg02/TruckHis02 (40-56) — see flow-designs.md.
-// equipment_no / test_sealed are not used in this JSON.
+// equipment_no / tested_sealed (TruckReg) / date_tested (TruckHis) are not used in this JSON.
+// TruckHis names the plate column differently (reg_plate_numbN, not reg_truck_numbN like
+// TruckReg) — vars.truckRows mixes both sources, so fall back to the TruckHis name.
 var trucks = (1 to 56) map (n) -> do {
     var suffix = n as String
     var rawMake = truckRow[("truck_make" ++ suffix)]
     var rawYear = truckRow[("year" ++ suffix)]
-    var rawPlate = truckRow[("reg_truck_numb" ++ suffix)]
+    var rawPlate = (truckRow[("reg_truck_numb" ++ suffix)]) default (truckRow[("reg_plate_numb" ++ suffix)])
     ---
     if (rawMake != null or rawYear != null or rawPlate != null)
         {

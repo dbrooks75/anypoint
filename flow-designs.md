@@ -702,27 +702,27 @@ Next: the vehicles file reads + `transform-vehicles-combine.dwl` join (see Vehic
 #### Vehicles source file layout (wide/denormalized)
 Four files, all sharing the same column shape — `TruckReg01`/`TruckReg02` (Current) and `TruckHis01`/`TruckHis02` (Historical), same relationship as `LaborStd`/`HisLaborStd`. The `01`/`02` split exists because the underlying source table was too wide to fit into Access for analysis as a single import, **not** because it's two logical tables — `01` and `02` together are one row per license.
 
-Non-repeating columns (present once per row):
+Non-repeating columns (present once per row) — confirmed same on `TruckReg01`/`TruckHis01`:
 | Column | Notes |
 |---|---|
 | `licenseno` | Join key back to `MercStd`/`MercAR` (same field used in `transform-bla-petroleum.dwl`'s AmountPaid lookup) |
 | `inspect_comp_code` | |
 | `inspect_comp` | |
-| `tot_reg_trucks` | **`TruckReg02`/`TruckHis02` only** |
-| `batch_id` | **`TruckReg02`/`TruckHis02` only** |
+| `tot_reg_trucks` | **`TruckReg02`/`TruckHis02` only** (not yet confirmed on `TruckHis02` specifically, but unused downstream either way) |
+| `batch_id` | **`TruckReg02`/`TruckHis02` only** (same caveat) |
 
-Repeating columns — one set of 5 per truck slot, column names suffixed `N` (**no leading zero** — `truck_make1`, `truck_make2`, ... `truck_make39`/`truck_make40`... not `truck_make01`):
-| Column prefix | Notes |
-|---|---|
-| `truck_make` | |
-| `year` | |
-| `reg_truck_numb` | |
-| `equipment_no` | |
-| `test_sealed` | |
+Repeating columns — one set of 5 per truck slot, column names suffixed `N` (**no leading zero** — `truck_make1`, `truck_make2`, ... `truck_make39`/`truck_make40`... not `truck_make01`). **`TruckReg01`/`02` (Current) and `TruckHis01`/`02` (Historical) use different names for two of the five columns** — confirmed the hard way after `transform-vehicles-petroleum.dwl` first assumed one name for both:
+| Meaning | TruckReg column | TruckHis column |
+|---|---|---|
+| Make | `truck_make` | `truck_make` |
+| Year | `year` | `year` |
+| Plate/reg number | `reg_truck_numb` | `reg_plate_numb` |
+| Equipment number | `equipment_no` | `equipment_no` |
+| Tested/sealed | `tested_sealed` | `date_tested` |
 
 Slot numbering is continuous across the two files, not restarting: `N = 1-39` in `TruckReg01`/`TruckHis01`, `N = 40-56` in `TruckReg02`/`TruckHis02` — so up to **56 truck slots per license**, split 39/17 across the two files. A license with fewer than 56 actual trucks leaves the remaining slot columns blank — the transform needs to filter those out, not create 56 empty vehicle entries per license.
 
-A truck slot `N` is considered populated (included in the output) if any of `truck_makeN`, `yearN`, or `reg_truck_numbN` is non-null — `equipment_no` and `test_sealed` are **not used** anywhere in the Petroleum load and can be ignored.
+A truck slot `N` is considered populated (included in the output) if any of `truck_makeN`, `yearN`, or the plate column (`reg_truck_numbN`/`reg_plate_numbN` depending on source) is non-null — `equipment_no` and the tested/sealed column are **not used** anywhere in the Petroleum load and can be ignored.
 
 **Source files**: `TruckReg01.csv`, `TruckReg02.csv`, `TruckHis01.csv`, `TruckHis02.csv` — headered CSVs (already-named columns, header: true), sitting in `C:\data\` alongside `MercStd.csv`/`MercAR.csv`. No positional renaming transform needed, unlike raw `laborstd.txt`/`his_lab.txt`.
 
@@ -750,7 +750,7 @@ Placed upfront, alongside the `LaborAR.csv` → `vars.arRows` read in the main F
 The AQR field is a long text field — value is a JSON **string** (`write(..., "application/json")`), not a structured field. Confirmed shape is `{rows: [...], columns: [...]}`:
 
 - `rows` — one object per populated truck slot: `{inService, vin, registrationExpiry, state, plateNumber, model, year, make}`. Mapping from source:
-  - `make` ← `truck_makeN`, `year` ← `yearN`, `plateNumber` ← `reg_truck_numbN`
+  - `make` ← `truck_makeN`, `year` ← `yearN`, `plateNumber` ← `reg_truck_numbN` (TruckReg) or `reg_plate_numbN` (TruckHis) — `transform-vehicles-petroleum.dwl` tries both since `vars.truckRows` mixes both sources
   - `vin`, `model` — hardcoded `""` (no source data)
   - `state` — hardcoded `"RI"`
   - `inService` — hardcoded `true` for every truck
