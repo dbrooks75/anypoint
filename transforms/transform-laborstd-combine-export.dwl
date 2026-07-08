@@ -1,4 +1,4 @@
 %dw 2.0
-output application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+output application/csv
 ---
 vars.currentRows ++ vars.historicalRows

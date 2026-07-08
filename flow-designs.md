@@ -13,13 +13,15 @@ Since the `.unl` files have no header row, importing them requires a reheadering
 3. ~~Add a `SourceFileType` column, hardcoded per source file (not derived from any column in the data) — e.g. `"Current"` for `LaborStd`, `"Historical"` for `LaborStdHis`.~~
 4. ~~Save as `.xlsx`.~~
 
-Steps 1-4 (manual Excel reheadering) are superseded for LaborStd by the **`ImportSourceData`** Mule flow — see subsection below. It reads the raw pipe-delimited files directly, assigns column names positionally, adds `SourceFileType`, and writes the combined `.xlsx` itself. This is what section 2 refers to as the `SourceFileType` column distinguishing merged Current/Historical records once these land in the combined `LaborStd`/`LaborAR` Access tables.
+Steps 1-4 (manual Excel reheadering) are superseded for LaborStd by the **`ImportSourceData`** Mule flow — see subsection below. It reads the raw pipe-delimited files directly, assigns column names positionally, adds `SourceFileType`, and writes the combined result as `.csv` (not `.xlsx` — CSV avoids the memory overhead of building an xlsx workbook in memory, see note below). This is what section 2 refers to as the `SourceFileType` column distinguishing merged Current/Historical records once these land in the combined `LaborStd`/`LaborAR` Access tables.
 
-5. Import the resulting `.xlsx` into a **`_raw` staging table** (e.g. `LaborStd_raw`), not the final table directly — the final table (e.g. `LaborStd`) has an AutoNumber (counter) primary key field, which a direct import can't populate/reconcile against.
+5. Import the resulting `.csv` into a **`_raw` staging table** (e.g. `LaborStd_raw`), not the final table directly — the final table (e.g. `LaborStd`) has an AutoNumber (counter) primary key field, which a direct import can't populate/reconcile against.
 6. Run an append query to copy rows from the `_raw` staging table into the final table (e.g. `LaborStd_raw` → `LaborStd`), letting Access assign the AutoNumber key as rows are appended.
 
 ### `ImportSourceData` flow — automated reheadering (LaborStd)
-Reads the two raw pipe-delimited LaborStd files, tags each with the right `SourceFileType`, combines them, and writes one `.xlsx` — replacing manual steps 1-4 above.
+Reads the two raw pipe-delimited LaborStd files, tags each with the right `SourceFileType`, combines them, and writes one `.csv` — replacing manual steps 1-4 above.
+
+**Why CSV and not xlsx**: the first version of this flow output xlsx and threw `OutOfMemoryError: Java heap space` on a 14MB/200KB input pair — not a data-volume problem, but because the underlying POI library builds the whole xlsx workbook as an in-memory object tree (every cell/row/style as a Java object), which commonly balloons far past the raw file size, easily exceeding Studio's default embedded-runtime heap. DataWeave's CSV writer has no such overhead. Since Access can import `.csv` just as easily as `.xlsx`, there was no reason to keep fighting the xlsx writer.
 
 **Source files** (pipe-delimited, no header row):
 | File | SourceFileType |
@@ -39,9 +41,9 @@ Reads the two raw pipe-delimited LaborStd files, tags each with the right `Sourc
 
 Since the trigger event's payload is `SourceDataReadyFlag.csv` itself, not the data files, the flow starts with explicit **File Read** operations for both `.txt` files rather than relying on the trigger payload (same reasoning as `LoadReadyFlag.csv` in section 2).
 
-**File paths** — everything in the same `C:\data\` folder the Salesforce load flow already polls (no conflict: the load flow's poller only matches `LaborStd.csv`/`LaborAR.csv`/`LoadReadyFlag.csv`/`AccountDeletes.csv` by exact name, and `.txt`/`.xlsx`/`SourceDataReadyFlag.csv` here don't collide with those):
+**File paths** — everything in the same `C:\data\` folder the Salesforce load flow already polls. Output is named `LaborStd_raw.csv`, **not** `LaborStd.csv` — that name is already taken by the Salesforce load flow's poller (section 2), and this file has different contents anyway (it's the reheadered import feed for the `LaborStd_raw` staging table, not the finished Access export):
 - Read: `C:\data\laborstd.txt`, `C:\data\his_lab.txt`
-- Write: `C:\data\LaborStd.xlsx`
+- Write: `C:\data\LaborStd_raw.csv`
 
 **Flow Structure (Studio build steps):**
 ```
@@ -49,23 +51,23 @@ Flow: ImportSourceData
 On New or Updated File (C:\data\, SourceDataReadyFlag.csv)
 
 File Read (Path: C:\data\laborstd.txt)
-  Input MIME type: application/csv
-  Reader properties: separator = "|", header = false
+  → On the Transform Message step's **Input** panel, explicitly define metadata for `payload` as CSV with `header: false`, `separator: "|"` — a `.txt` extension doesn't auto-detect as CSV the way `.csv` does, so without this the payload arrives as a raw String and `map` throws "expects Array, got String" (hit this during testing). Once defined, Studio parses each row into an object with generic keys (`column_0`, `column_1`, ...).
   → Set Variable: sourceFileType = "Current"
-  → Transform Message (transform-laborstd-raw-name.dwl — assigns the 30 column names positionally via `row pluck $`, since header:false means the reader's own field keys can't be relied on; appends SourceFileType from vars.sourceFileType)
+  → Transform Message (transform-laborstd-raw-name.dwl — operates on `payload` directly, now a pre-parsed Array; assigns the 30 real column names positionally via `row pluck $`, which reads values in column order regardless of the generic `column_N` keys Studio assigned; appends SourceFileType from vars.sourceFileType)
   → Set Variable: currentRows = payload
 
 File Read (Path: C:\data\his_lab.txt)
-  Same Input MIME type / reader properties as above
   → Set Variable: sourceFileType = "Historical"
   → Transform Message (transform-laborstd-raw-name.dwl — same transform, reused; SourceFileType comes out "Historical" this time since it reads vars.sourceFileType)
   → Set Variable: historicalRows = payload
 
-Transform Message (transform-laborstd-combine-export.dwl — vars.currentRows ++ vars.historicalRows, output application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
-File Write (Path: C:\data\LaborStd.xlsx)
-```
+Transform Message (transform-laborstd-combine-export.dwl — vars.currentRows ++ vars.historicalRows, output application/csv)
+File Write (Path: C:\data\LaborStd_raw.csv)
 
-**Needs verification in Studio**: the `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (xlsx) output mimeType/writer hasn't been confirmed against this specific Studio/Mule runtime version yet — check the Transform Message's output metadata format picker for the exact Excel writer format it exposes, and adjust `transform-laborstd-combine-export.dwl`'s `output` directive to match if different. Also confirm the CSV reader's "separator" property field accepts `|` directly in this Studio version (7.21) — some connector versions expect it under a differently-labeled reader property.
+File Move: C:\data\laborstd.txt → C:\data\processed\
+File Move: C:\data\his_lab.txt → C:\data\processed\
+```
+Archived last, same convention and reasoning as `LaborStd.csv`/`LaborAR.csv` in section 2 — if the flow errors out partway, the raw files are still sitting in `C:\data\` for investigation/retry rather than already relocated.
 
 ### Combine + Load Process (per work unit)
 1. Current and historical datasets for a given table (e.g. `LaborStd` + `HisLaborStd`) are combined and loaded into Access, with `SourceFileType` (`Current` or `Historical`) set per source table as part of the load.
@@ -214,6 +216,8 @@ Set Variable: accountRecordTypeId = #[payload[0].Id]
 
 ### Mailing / Physical Location Rule
 If `add1` and `add2` are both non-null and one of them contains "PO Box", that one is the **Mailing** address and the other is the **Physical** address — two Location records are created (`transform-location.dwl`: `Name` = `"Mailing"` / `"Physical Location"`). Otherwise, a single `"Mailing"` Location is created covering the whole address.
+
+**"P.O. Box" variant**: the source data has both `"PO Box"` and `"P.O. Box"` (periods) — a plain `contains "po box"` on the lowercased string misses the latter, since the periods break the substring match. Fix (in both `transform-location.dwl` and `transform-address.dwl`, which duplicate this same PO Box check): strip periods before matching — `(lower(add1) replace "." with "") contains "po box"`.
 
 `Address_Type__c` (picklist on Address__c / PartyAddress__c) only accepts `"Mailing"` / `"Physical"` — **not** `"Physical Location"`. The Location's `Name` field keeps the fuller phrase for readability, but the `addressType` variable driving Address__c/PartyAddress__c creation must be normalized to `"Physical"` (see Flow Structure below — this is a derived value, not a direct copy of `Location.Name`).
 
@@ -648,18 +652,73 @@ Choice
 
 ---
 
-## 6. Next Work Unit: Petroleum (Planned)
+## 6. Next Work Unit: Petroleum (In Progress)
 
-Source data is very similar to Jewelry — plan is to copy this entire flow file as the starting point rather than build from scratch.
+Source data is very similar to Jewelry — the `Petroleum` flow in Studio was copied from the Jewelry flow file as the starting point rather than built from scratch. **Naming note**: the client uses "Mercantile" and "Petroleum" interchangeably — source files are prefixed `Merc` (`MercStd`, `MercAR`), but the work unit/Salesforce-facing naming stays "Petroleum" throughout this doc.
 
-Key difference: there's an additional source file listing **vehicles**, which adds data to a couple of the Assessment Question Responses. Unlike the Jewelry AQR transform (`transform-assessment-question-response.dwl`), which maps a fixed static list of 7 questions, Petroleum's AQR will need to handle **per-vehicle repetition** for whichever questions the vehicle data feeds — similar in shape to how Contacts handle "up to 4" respparty entries (`transform-contact.dwl`), not a fixed-count list. Will need its own File Read for the vehicles file and a modified/branched version of the AQR transform when that work starts.
+### Work Units
+| File | Description |
+|---|---|
+| `MercStd.csv` | Petroleum equivalent of `LaborStd.csv` |
+| `MercAR.csv` | Petroleum equivalent of `LaborAR.csv` |
 
-**Do not carry over `AddSentInvoice`** (section 4) — that's a one-time Jewelry cutover requirement (old-system invoices with no AR payment record), not a general pattern. Strip it, its Flow Reference call, the `blaJobnoLog`-filter-to-Current step, and `transform-sent-invoice.dwl`/`transform-sent-invoiceline.dwl` out of the copied flow before building Petroleum.
+**Do not carry over `AddSentInvoice`** (section 4) — that's a one-time Jewelry cutover requirement (old-system invoices with no AR payment record), not a general pattern. Strip it, its Flow Reference call, the `blaJobnoLog`-filter-to-Current step, and `transform-sent-invoice.dwl`/`transform-sent-invoiceline.dwl` out of the copied flow.
 
-**Hardcoded Jewelry-specific literals to update** when copying (found by grepping the transforms for `Jewelry`/`Labor Standards` — worth re-checking for other work-unit-specific values too, this may not be exhaustive):
-- `transform-location.dwl` — `Description: "Jewelry " ++ name ++ " Address for Job No " ++ jobno` → change `"Jewelry"` to `"Petroleum"`
-- `transform-bla.dwl` — `Trade__c: "Labor Standards"` → needs whatever Trade__c value applies to Petroleum (business decision, not yet known)
-- `transform-bla.dwl` — `AmountPaid` hardcoded to `0` for Jewelry; the original formula (`if ((vars.row.tot_pymt default "") != "") vars.row.tot_pymt as Number else null`) is kept as a comment in the file — confirm with the business whether Petroleum should use the real formula instead of hardcoding
+**Vehicles** — there's an additional source file listing vehicles, which adds data to a couple of the Assessment Question Responses. Unlike the Jewelry AQR transform (`transform-assessment-question-response.dwl`), which maps a fixed static list of 7 questions, Petroleum's AQR will need to handle **per-vehicle repetition** for whichever questions the vehicle data feeds — similar in shape to how Contacts handle "up to 4" respparty entries (`transform-contact.dwl`), not a fixed-count list.
+
+#### Vehicles source file layout (wide/denormalized)
+Four files, all sharing the same column shape — `TruckReg01`/`TruckReg02` (Current) and `TruckHis01`/`TruckHis02` (Historical), same relationship as `LaborStd`/`HisLaborStd`. The `01`/`02` split exists because the underlying source table was too wide to fit into Access for analysis as a single import, **not** because it's two logical tables — `01` and `02` together are one row per license.
+
+Non-repeating columns (present once per row):
+| Column | Notes |
+|---|---|
+| `licenseno` | Join key back to `MercStd`/`MercAR` (same field used in `transform-bla-petroleum.dwl`'s AmountPaid lookup) |
+| `inspect_comp_code` | |
+| `inspect_comp` | |
+| `tot_reg_trucks` | **`TruckReg02`/`TruckHis02` only** |
+| `batch_id` | **`TruckReg02`/`TruckHis02` only** |
+
+Repeating columns — one set of 5 per truck slot, column names suffixed `N` (**no leading zero** — `truck_make1`, `truck_make2`, ... `truck_make39`/`truck_make40`... not `truck_make01`):
+| Column prefix | Notes |
+|---|---|
+| `truck_make` | |
+| `year` | |
+| `reg_truck_numb` | |
+| `equipment_no` | |
+| `test_sealed` | |
+
+Slot numbering is continuous across the two files, not restarting: `N = 1-39` in `TruckReg01`/`TruckHis01`, `N = 40-56` in `TruckReg02`/`TruckHis02` — so up to **56 truck slots per license**, split 39/17 across the two files. A license with fewer than 56 actual trucks leaves the remaining slot columns blank — the transform needs to filter those out, not create 56 empty vehicle entries per license.
+
+**Open design questions before this can be built** (see conversation — not yet resolved):
+- How to detect a populated vs. empty truck slot (e.g. `reg_truck_numbN` non-blank) to filter out unused slots for licenses with fewer than 56 trucks.
+- How `TruckReg01`/`TruckReg02` (and their Historical counterparts) get combined — presumably joined on `licenseno` per row, same as the `01`/`02` split — before being usable per-BLA in the flow.
+- Exact JSON shape expected in the `PET_Delivery_Vehicles` AQR value (see below) — array of `{make, year, reg_truck_numb, equipment_no, test_sealed}` objects is the assumed shape, not yet confirmed.
+
+#### Assessment Question Response (AQR) mapping
+Like Jewelry, each Account gets a BLA, an Assessment, and a set of AQRs (`transform-assessment-question-response.dwl` pattern). **Difference from Jewelry**: Petroleum's AQRs get real values fed in, where Jewelry currently sends `null` for every response field regardless of question (see `transform-assessment-question-response.dwl` — all of `CurrencyValue`/`DateValue`/`IntegerResponseValue`/`ChoiceValue`/`ResponseText` are hardcoded `null`).
+
+Petroleum's question list (order given, replaces Jewelry's 7-question fixed list — will need its own `transform-assessment-question-response-petroleum.dwl`):
+| # | Question | Value |
+|---|---|---|
+| 1 | PET Name on Vehicle Different | hardcoded `false` (like Jewelry's nulls) |
+| 2 | PET Name on Vehicle | `null` for all (like Jewelry) |
+| 3 | PET Insurance Company | `MercStd.insurance_company` |
+| 4 | PET Policy Expiration | `MercStd.ins_expire_date` |
+| 5 | PET Date App Received | `MercStd.date_issued` |
+| 6 | PET_Delivery_Vehicles | **tricky one** — a JSON array of trucks, built from the truck tables (see open question above on exact shape) |
+
+### Petroleum-specific transforms (new files, Jewelry's originals untouched)
+Everything not listed here (`transform-address.dwl`, `transform-contact.dwl`, `transform-invoice.dwl`, `transform-payment.dwl`, etc.) is unchanged from Jewelry and reused as-is in the copied flow.
+
+- **`transform-location-petroleum.dwl`** — same as `transform-location.dwl`, `Description` literal changed from `"Jewelry "` to `"Petroleum "`.
+- **`transform-bla-petroleum.dwl`** — differs from `transform-bla.dwl` in two fields:
+  - `Trade__c` — hardcoded to `"TBD"` placeholder (real value not yet decided — see dev question).
+  - `AmountPaid` — **not** hardcoded to `0` like Jewelry. Business rule: the `tot_pymt` from the `MercAR` (AR) record with the **max** `deposit_date`, matched by `licenseno` (not `jobno` — `MercStd`/`MercAR` rows carry a `licenseno` field specifically for this lookup). Implemented by filtering `vars.arRows` (Petroleum's pre-parsed AR rows, same "parse once upfront" pattern as Jewelry's `vars.arRows` — see section 2's Flow Structure and section 5) to `licenseno` matches, then taking the row with the latest `deposit_date` — mirror image of `transform-account-status.dwl`'s oldest-date logic (section 5), just `[-1]` (last, since `orderBy` is ascending) instead of `[0]`.
+
+### Open items
+- `Trade__c` value for Petroleum — logged as dev question #9.
+- Vehicles file layout / AQR per-vehicle repetition — deferred, see Vehicles note above.
+- Whether `MercStd`/`MercAR`'s `deposit_date` format matches Jewelry's `LaborAR.csv` (`M/d/yyyy`, non-padded — see section 3's Date Format note) needs confirming once real data is available; `transform-bla-petroleum.dwl` currently assumes it does.
 
 ---
 

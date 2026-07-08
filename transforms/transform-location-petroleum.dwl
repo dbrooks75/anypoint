@@ -13,7 +13,7 @@ fun location(name: String) =
     {
         LocationType: "Business Site",
         Name: name,
-        Description: "Jewelry " ++ name ++ " Address for Job No " ++ jobno
+        Description: "Petroleum " ++ name ++ " Address for Job No " ++ jobno
     }
 ---
 if (bothPopulated and (hasPOBox1 or hasPOBox2))
