@@ -1,7 +1,7 @@
 %dw 2.0
 output application/java
 
-// Reused for both Current (TruckReg01/02) and Historical (TruckHis01/02) pairs —
+// Reused for both Current (TrucksReg01/02) and Historical (TrucksHis01/02) pairs —
 // same "one transform, two Set Variable calls" reuse pattern as transform-laborstd-raw-name.dwl.
 var part1 = vars.truckPart1Rows default []
 var part2 = vars.truckPart2Rows default []

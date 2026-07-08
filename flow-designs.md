@@ -700,19 +700,19 @@ Next: the vehicles file reads + `transform-vehicles-combine.dwl` join (see Vehic
 **Vehicles** — there's an additional source file listing vehicles, which adds data to a couple of the Assessment Question Responses. Unlike the Jewelry AQR transform (`transform-assessment-question-response.dwl`), which maps a fixed static list of 7 questions, Petroleum's AQR will need to handle **per-vehicle repetition** for whichever questions the vehicle data feeds — similar in shape to how Contacts handle "up to 4" respparty entries (`transform-contact.dwl`), not a fixed-count list.
 
 #### Vehicles source file layout (wide/denormalized)
-Four files, all sharing the same column shape — `TruckReg01`/`TruckReg02` (Current) and `TruckHis01`/`TruckHis02` (Historical), same relationship as `LaborStd`/`HisLaborStd`. The `01`/`02` split exists because the underlying source table was too wide to fit into Access for analysis as a single import, **not** because it's two logical tables — `01` and `02` together are one row per license.
+Four files, all sharing the same column shape — `TrucksReg01`/`TrucksReg02` (Current) and `TrucksHis01`/`TrucksHis02` (Historical), same relationship as `LaborStd`/`HisLaborStd`. The `01`/`02` split exists because the underlying source table was too wide to fit into Access for analysis as a single import, **not** because it's two logical tables — `01` and `02` together are one row per license.
 
-Non-repeating columns (present once per row) — confirmed same on `TruckReg01`/`TruckHis01`:
+Non-repeating columns (present once per row) — confirmed same on `TrucksReg01`/`TrucksHis01`:
 | Column | Notes |
 |---|---|
 | `licenseno` | Join key back to `MercStd`/`MercAR` (same field used in `transform-bla-petroleum.dwl`'s AmountPaid lookup) |
 | `inspect_comp_code` | |
 | `inspect_comp` | |
-| `tot_reg_trucks` | **`TruckReg02`/`TruckHis02` only** (not yet confirmed on `TruckHis02` specifically, but unused downstream either way) |
-| `batch_id` | **`TruckReg02`/`TruckHis02` only** (same caveat) |
+| `tot_reg_trucks` | **`TrucksReg02`/`TrucksHis02` only** (not yet confirmed on `TrucksHis02` specifically, but unused downstream either way) |
+| `batch_id` | **`TrucksReg02`/`TrucksHis02` only** (same caveat) |
 
-Repeating columns — one set of 5 per truck slot, column names suffixed `N` (**no leading zero** — `truck_make1`, `truck_make2`, ... `truck_make39`/`truck_make40`... not `truck_make01`). **`TruckReg01`/`02` (Current) and `TruckHis01`/`02` (Historical) use different names for two of the five columns** — confirmed the hard way after `transform-vehicles-petroleum.dwl` first assumed one name for both:
-| Meaning | TruckReg column | TruckHis column |
+Repeating columns — one set of 5 per truck slot, column names suffixed `N` (**no leading zero** — `truck_make1`, `truck_make2`, ... `truck_make39`/`truck_make40`... not `truck_make01`). **`TrucksReg01`/`02` (Current) and `TrucksHis01`/`02` (Historical) use different names for two of the five columns** — confirmed the hard way after `transform-vehicles-petroleum.dwl` first assumed one name for both:
+| Meaning | TrucksReg column | TrucksHis column |
 |---|---|---|
 | Make | `truck_make` | `truck_make` |
 | Year | `year` | `year` |
@@ -720,24 +720,24 @@ Repeating columns — one set of 5 per truck slot, column names suffixed `N` (**
 | Equipment number | `equipment_no` | `equipment_no` |
 | Tested/sealed | `tested_sealed` | `date_tested` |
 
-Slot numbering is continuous across the two files, not restarting: `N = 1-39` in `TruckReg01`/`TruckHis01`, `N = 40-56` in `TruckReg02`/`TruckHis02` — so up to **56 truck slots per license**, split 39/17 across the two files. A license with fewer than 56 actual trucks leaves the remaining slot columns blank — the transform needs to filter those out, not create 56 empty vehicle entries per license.
+Slot numbering is continuous across the two files, not restarting: `N = 1-39` in `TrucksReg01`/`TrucksHis01`, `N = 40-56` in `TrucksReg02`/`TrucksHis02` — so up to **56 truck slots per license**, split 39/17 across the two files. A license with fewer than 56 actual trucks leaves the remaining slot columns blank — the transform needs to filter those out, not create 56 empty vehicle entries per license.
 
 A truck slot `N` is considered populated (included in the output) if any of `truck_makeN`, `yearN`, or the plate column (`reg_truck_numbN`/`reg_plate_numbN` depending on source) is non-null — `equipment_no` and the tested/sealed column are **not used** anywhere in the Petroleum load and can be ignored.
 
-**Source files**: `TruckReg01.csv`, `TruckReg02.csv`, `TruckHis01.csv`, `TruckHis02.csv` — headered CSVs (already-named columns, header: true), sitting in `C:\data\` alongside `MercStd.csv`/`MercAR.csv`. No positional renaming transform needed, unlike raw `laborstd.txt`/`his_lab.txt`.
+**Source files**: `TrucksReg01.csv`, `TrucksReg02.csv`, `TrucksHis01.csv`, `TrucksHis02.csv` — headered CSVs (already-named columns, header: true), sitting in `C:\data\` alongside `MercStd.csv`/`MercAR.csv`. No positional renaming transform needed, unlike raw `laborstd.txt`/`his_lab.txt`.
 
 **Join** — `01`/`02` combined by `licenseno` into one row per license, via `transform-vehicles-combine.dwl` (reused for both the Current pair and the Historical pair, same "one transform, two Set Variable calls" reuse pattern as `transform-laborstd-raw-name.dwl`), then Current + Historical concatenated into `vars.truckRows`:
 ```
-File Read: C:\data\TruckReg01.csv
+File Read: C:\data\TrucksReg01.csv
   → Set Variable: truckPart1Rows = #[payload]
-File Read: C:\data\TruckReg02.csv
+File Read: C:\data\TrucksReg02.csv
   → Set Variable: truckPart2Rows = #[payload]
 Transform Message (transform-vehicles-combine.dwl — joins truckPart1Rows/truckPart2Rows on licenseno)
   → Set Variable: currentTruckRows = #[payload]
 
-File Read: C:\data\TruckHis01.csv
+File Read: C:\data\TrucksHis01.csv
   → Set Variable: truckPart1Rows = #[payload]
-File Read: C:\data\TruckHis02.csv
+File Read: C:\data\TrucksHis02.csv
   → Set Variable: truckPart2Rows = #[payload]
 Transform Message (transform-vehicles-combine.dwl — same transform, reused)
   → Set Variable: historicalTruckRows = #[payload]
@@ -750,7 +750,7 @@ Placed upfront, alongside the `LaborAR.csv` → `vars.arRows` read in the main F
 The AQR field is a long text field — value is a JSON **string** (`write(..., "application/json")`), not a structured field. Confirmed shape is `{rows: [...], columns: [...]}`:
 
 - `rows` — one object per populated truck slot: `{inService, vin, registrationExpiry, state, plateNumber, model, year, make}`. Mapping from source:
-  - `make` ← `truck_makeN`, `year` ← `yearN`, `plateNumber` ← `reg_truck_numbN` (TruckReg) or `reg_plate_numbN` (TruckHis) — `transform-vehicles-petroleum.dwl` tries both since `vars.truckRows` mixes both sources
+  - `make` ← `truck_makeN`, `year` ← `yearN`, `plateNumber` ← `reg_truck_numbN` (TrucksReg) or `reg_plate_numbN` (TrucksHis) — `transform-vehicles-petroleum.dwl` tries both since `vars.truckRows` mixes both sources
   - `vin`, `model` — hardcoded `""` (no source data)
   - `state` — hardcoded `"RI"`
   - `inService` — hardcoded `true` for every truck
@@ -790,7 +790,7 @@ Everything not listed here (`transform-address.dwl`, `transform-contact.dwl`, `t
 - `registrationExpiry` real source/value for `PET_Delivery_Vehicles` — logged as dev question #10.
 - `ApplicationType` (New/Renewal) — no jobno to derive it from, logged as dev question #11.
 - Whether `MercStd`/`MercAR`'s date columns (`deposit_date`, `ins_expire_date`, `date_issued`) match Jewelry's `LaborAR.csv` format (`M/d/yyyy`, non-padded — see section 3's Date Format note) needs confirming once real data is available; `transform-bla-petroleum.dwl` and `transform-assessment-question-response-petroleum.dwl` currently assume they do.
-- **Needs verification in Studio**: confirm the CSV reader picks up headers correctly for all 4 truck files (`header: true`) and that `licenseno` comes through as the same type/format across `TruckReg01`/`02`/`TruckHis01`/`02` and `MercStd`/`MercAR` for the join/filter to match reliably.
+- **Needs verification in Studio**: confirm the CSV reader picks up headers correctly for all 4 truck files (`header: true`) and that `licenseno` comes through as the same type/format across `TrucksReg01`/`02`/`TrucksHis01`/`02` and `MercStd`/`MercAR` for the join/filter to match reliably.
 - No jobno anywhere in Petroleum means Jewelry's `AddInvoices`/`blaJobnoLog` join needs a licenseno-keyed equivalent (`blaLicenseLog`?) — not yet designed, see no-jobno note above.
 
 ---

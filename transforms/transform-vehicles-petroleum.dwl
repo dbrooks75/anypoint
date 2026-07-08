@@ -1,16 +1,16 @@
 %dw 2.0
 output application/json
 
-// vars.truckRows: one row per licenseno, TruckReg01/02 (or TruckHis01/02) already joined —
+// vars.truckRows: one row per licenseno, TrucksReg01/02 (or TrucksHis01/02) already joined —
 // see flow-designs.md section 6 Vehicles note for the open question on how that join happens.
 var licenseno = vars.row.licenseno default ""
 var truckRow = (vars.truckRows filter (row) -> (row.licenseno default "") == licenseno)[0] default {}
 
 // Slot columns have no leading zero (truck_make1 .. truck_make56), continuous across
-// TruckReg01/TruckHis01 (1-39) and TruckReg02/TruckHis02 (40-56) — see flow-designs.md.
-// equipment_no / tested_sealed (TruckReg) / date_tested (TruckHis) are not used in this JSON.
-// TruckHis names the plate column differently (reg_plate_numbN, not reg_truck_numbN like
-// TruckReg) — vars.truckRows mixes both sources, so fall back to the TruckHis name.
+// TrucksReg01/TrucksHis01 (1-39) and TrucksReg02/TrucksHis02 (40-56) — see flow-designs.md.
+// equipment_no / tested_sealed (TrucksReg) / date_tested (TrucksHis) are not used in this JSON.
+// TrucksHis names the plate column differently (reg_plate_numbN, not reg_truck_numbN like
+// TrucksReg) — vars.truckRows mixes both sources, so fall back to the TrucksHis name.
 var trucks = (1 to 56) map (n) -> do {
     var suffix = n as String
     var rawMake = truckRow[("truck_make" ++ suffix)]
