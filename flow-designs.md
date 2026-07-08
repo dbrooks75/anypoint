@@ -691,7 +691,27 @@ Slot numbering is continuous across the two files, not restarting: `N = 1-39` in
 
 A truck slot `N` is considered populated (included in the output) if any of `truck_makeN`, `yearN`, or `reg_truck_numbN` is non-null — `equipment_no` and `test_sealed` are **not used** anywhere in the Petroleum load and can be ignored.
 
-**Still open**: how `TruckReg01`/`TruckReg02` (and their Historical counterparts) get combined into one row per `licenseno` — presumably joined per row, same as the `01`/`02` split — before being usable per-BLA in the flow. Implemented in `transform-vehicles-petroleum.dwl` as `vars.truckRows` (read: already joined, pre-parsed once upfront, same pattern as `vars.arRows`) — the join itself isn't built yet.
+**Source files**: `TruckReg01.csv`, `TruckReg02.csv`, `TruckHis01.csv`, `TruckHis02.csv` — headered CSVs (already-named columns, header: true), sitting in `C:\data\` alongside `MercStd.csv`/`MercAR.csv`. No positional renaming transform needed, unlike raw `laborstd.txt`/`his_lab.txt`.
+
+**Join** — `01`/`02` combined by `licenseno` into one row per license, via `transform-vehicles-combine.dwl` (reused for both the Current pair and the Historical pair, same "one transform, two Set Variable calls" reuse pattern as `transform-laborstd-raw-name.dwl`), then Current + Historical concatenated into `vars.truckRows`:
+```
+File Read: C:\data\TruckReg01.csv
+  → Set Variable: truckPart1Rows = #[payload]
+File Read: C:\data\TruckReg02.csv
+  → Set Variable: truckPart2Rows = #[payload]
+Transform Message (transform-vehicles-combine.dwl — joins truckPart1Rows/truckPart2Rows on licenseno)
+  → Set Variable: currentTruckRows = #[payload]
+
+File Read: C:\data\TruckHis01.csv
+  → Set Variable: truckPart1Rows = #[payload]
+File Read: C:\data\TruckHis02.csv
+  → Set Variable: truckPart2Rows = #[payload]
+Transform Message (transform-vehicles-combine.dwl — same transform, reused)
+  → Set Variable: historicalTruckRows = #[payload]
+
+Set Variable: truckRows = #[vars.currentTruckRows ++ vars.historicalTruckRows]
+```
+Placed upfront, alongside the `LaborAR.csv` → `vars.arRows` read in the main Flow Structure (section 2) — parsed once before the main `For Each`, same "parse once, filter per-row inside the transform" pattern `vars.arRows` uses (no `SourceFileType` filtering needed here, same as `vars.arRows`'s `licenseno`-only matching in `transform-bla-petroleum.dwl`).
 
 #### `PET_Delivery_Vehicles` JSON shape (confirmed)
 The AQR field is a long text field — value is a JSON **string** (`write(..., "application/json")`), not a structured field. Confirmed shape is `{rows: [...], columns: [...]}`:
@@ -726,14 +746,15 @@ Everything not listed here (`transform-address.dwl`, `transform-contact.dwl`, `t
 - **`transform-bla-petroleum.dwl`** — differs from `transform-bla.dwl` in two fields:
   - `Trade__c` — hardcoded to `"TBD"` placeholder (real value not yet decided — see dev question).
   - `AmountPaid` — **not** hardcoded to `0` like Jewelry. Business rule: the `tot_pymt` from the `MercAR` (AR) record with the **max** `deposit_date`, matched by `licenseno` (not `jobno` — `MercStd`/`MercAR` rows carry a `licenseno` field specifically for this lookup). Implemented by filtering `vars.arRows` (Petroleum's pre-parsed AR rows, same "parse once upfront" pattern as Jewelry's `vars.arRows` — see section 2's Flow Structure and section 5) to `licenseno` matches, then taking the row with the latest `deposit_date` — mirror image of `transform-account-status.dwl`'s oldest-date logic (section 5), just `[-1]` (last, since `orderBy` is ascending) instead of `[0]`.
+- **`transform-vehicles-combine.dwl`** — joins the `01`/`02` truck file pairs on `licenseno` into one row per license; reused once for the Current pair and once for the Historical pair (see Vehicles Flow Structure above).
 - **`transform-vehicles-petroleum.dwl`** — builds the `PET_Delivery_Vehicles` JSON string (see shape above) from `vars.truckRows` filtered to the current `vars.row.licenseno`. Output of a dedicated Transform Message step, stored as `vars.deliveryVehiclesJson`, ahead of the AQR transform — same "compute once, stash in a var" shape as `vars.aqvMap`/`vars.arRows`.
 - **`transform-assessment-question-response-petroleum.dwl`** — Petroleum's version of `transform-assessment-question-response.dwl`, 6-question list instead of Jewelry's 7, with real values instead of all-null (see AQR mapping above). Date fields assume `M/d/yyyy` format, same unconfirmed assumption as `transform-bla-petroleum.dwl`'s `deposit_date`.
 
 ### Open items
 - `Trade__c` value for Petroleum — logged as dev question #9.
 - `registrationExpiry` real source/value for `PET_Delivery_Vehicles` — logged as dev question #10.
-- How `TruckReg01`/`TruckReg02` (and Historical counterparts) get joined per `licenseno` into `vars.truckRows` — not yet built, see Vehicles note above.
 - Whether `MercStd`/`MercAR`'s date columns (`deposit_date`, `ins_expire_date`, `date_issued`) match Jewelry's `LaborAR.csv` format (`M/d/yyyy`, non-padded — see section 3's Date Format note) needs confirming once real data is available; `transform-bla-petroleum.dwl` and `transform-assessment-question-response-petroleum.dwl` currently assume they do.
+- **Needs verification in Studio**: confirm the CSV reader picks up headers correctly for all 4 truck files (`header: true`) and that `licenseno` comes through as the same type/format across `TruckReg01`/`02`/`TruckHis01`/`02` and `MercStd`/`MercAR` for the join/filter to match reliably.
 
 ---
 
