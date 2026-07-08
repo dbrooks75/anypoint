@@ -667,20 +667,25 @@ Own sentinel file, separate from Jewelry's (see TODO in section 2 to rename Jewe
 | `MercStd.csv` | Petroleum equivalent of `LaborStd.csv` |
 | `MercAR.csv` | Petroleum equivalent of `LaborAR.csv` |
 
+**No `jobno` field anywhere in Petroleum** — unlike Jewelry, both `MercStd.csv` and `MercAR.csv` are keyed purely by `licenseno` (confirmed field list for `MercStd.csv`: `licenseno, processed, compname, respparty, add1, add2, city, state, zip, area_code, phone_no, contact_fname, contact_mi, contact_lname, contact_area_code, contact_telephone, email_addr, no_trucks, certificate, inspect_date, reinspect_date, no_insp_truck, no_non_truck, no_show, license_issued, insurance_agent, insurance_company, ins_expire_date, certif_dmv, certif_gu, date_issued, comments, batch_id` — no `jobno`, no `ID`). `MercAR.csv` is licenseno-only too. This ripples through several places that assumed a jobno, mirroring Jewelry too closely at first:
+- `transform-filter-and-name-petroleum.dwl` / `transform-ar-filter-and-name-petroleum.dwl` — filter/clean `licenseno` only, no jobno handling, no "ID" rename (fixed, see commit history)
+- `transform-location-petroleum.dwl` — `Description` reads "...Address for License No " ++ licenseno (was jobno)
+- `transform-bla-petroleum.dwl` — `Description` reads "Legacy License Number: " ++ licenseno (was jobno); `ApplicationType` (New/Renewal) has no equivalent to Jewelry's jobno-last-2-digits trick — hardcoded `"TBD"` placeholder, logged as dev question #11
+- **Still open**: Jewelry's `AddInvoices`/`blaJobnoLog` join Invoice__c/Payment__c back to the right BLA via `jobno`. Petroleum has no jobno to join on, so this needs a `blaLicenseLog` (or similar) keyed by `licenseno` instead — not yet designed, flag when building that part of the flow.
+
 ### Flow Structure (in progress — built incrementally in Studio, this reflects current state)
 ```
 On New or Updated File (C:\data\, LoadReadyFlagPetroleum.csv)
 
 File Read (Path: C:\data\MercStd.csv)
   → Transform Message (transform-filter-and-name-petroleum.dwl — filters rows with an invalid
-    jobno, strips Access's ".0" decimal suffix off jobno and licenseno, same quirk as
-    LaborStd.csv — but unlike LaborStd.csv, neither MercStd.csv nor MercAR.csv has an "ID"
-    column, so there's no rename step here)
+    licenseno, strips Access's ".0" decimal suffix off licenseno; no jobno, no "ID" column,
+    unlike LaborStd.csv)
   → Set Variable: mercStdRows = #[payload]
 
 File Read (Path: C:\data\MercAR.csv)
-  → Transform Message (transform-ar-filter-and-name-petroleum.dwl — same quirks as LaborAR.csv:
-    filters/cleans jobno and licenseno the same way, sorts by deposit_date ascending)
+  → Transform Message (transform-ar-filter-and-name-petroleum.dwl — same licenseno clean-up,
+    sorts by deposit_date ascending)
   → Set Variable: arRows = #[payload] (same var name as Jewelry's vars.arRows — already referenced
     by transform-bla-petroleum.dwl's AmountPaid lookup)
 ```
@@ -766,10 +771,12 @@ Petroleum's question list (order given, replaces Jewelry's 7-question fixed list
 ### Petroleum-specific transforms (new files, Jewelry's originals untouched)
 Everything not listed here (`transform-address.dwl`, `transform-contact.dwl`, `transform-invoice.dwl`, `transform-payment.dwl`, etc.) is unchanged from Jewelry and reused as-is in the copied flow.
 
-- **`transform-location-petroleum.dwl`** — same as `transform-location.dwl`, `Description` literal changed from `"Jewelry "` to `"Petroleum "`.
-- **`transform-bla-petroleum.dwl`** — differs from `transform-bla.dwl` in two fields:
-  - `Trade__c` — hardcoded to `"TBD"` placeholder (real value not yet decided — see dev question).
-  - `AmountPaid` — **not** hardcoded to `0` like Jewelry. Business rule: the `tot_pymt` from the `MercAR` (AR) record with the **max** `deposit_date`, matched by `licenseno` (not `jobno` — `MercStd`/`MercAR` rows carry a `licenseno` field specifically for this lookup). Implemented by filtering `vars.arRows` (Petroleum's pre-parsed AR rows, same "parse once upfront" pattern as Jewelry's `vars.arRows` — see section 2's Flow Structure and section 5) to `licenseno` matches, then taking the row with the latest `deposit_date` — mirror image of `transform-account-status.dwl`'s oldest-date logic (section 5), just `[-1]` (last, since `orderBy` is ascending) instead of `[0]`.
+- **`transform-location-petroleum.dwl`** — same as `transform-location.dwl`, `Description` literal changed from `"Jewelry "` to `"Petroleum "`, and reads `"...Address for License No " ++ licenseno` instead of `"...Job No " ++ jobno` (MercStd has no jobno — see the no-jobno note above).
+- **`transform-bla-petroleum.dwl`** — differs from `transform-bla.dwl` in several fields:
+  - `Trade__c` — hardcoded to `"TBD"` placeholder (real value not yet decided — see dev question #9).
+  - `ApplicationType` — hardcoded to `"TBD"` placeholder; no jobno to derive New/Renewal from — see dev question #11.
+  - `Description` reads `"Legacy License Number: " ++ licenseno` instead of `"Legacy Job Number: " ++ jobno`.
+  - `AmountPaid` — **not** hardcoded to `0` like Jewelry. Business rule: the `tot_pymt` from the `MercAR` (AR) record with the **max** `deposit_date`, matched by `licenseno`. Implemented by filtering `vars.arRows` (Petroleum's pre-parsed AR rows, same "parse once upfront" pattern as Jewelry's `vars.arRows` — see section 2's Flow Structure and section 5) to `licenseno` matches, then taking the row with the latest `deposit_date` — mirror image of `transform-account-status.dwl`'s oldest-date logic (section 5), just `[-1]` (last, since `orderBy` is ascending) instead of `[0]`.
 - **`transform-vehicles-combine.dwl`** — joins the `01`/`02` truck file pairs on `licenseno` into one row per license; reused once for the Current pair and once for the Historical pair (see Vehicles Flow Structure above).
 - **`transform-vehicles-petroleum.dwl`** — builds the `PET_Delivery_Vehicles` JSON string (see shape above) from `vars.truckRows` filtered to the current `vars.row.licenseno`. Output of a dedicated Transform Message step, stored as `vars.deliveryVehiclesJson`, ahead of the AQR transform — same "compute once, stash in a var" shape as `vars.aqvMap`/`vars.arRows`.
 - **`transform-assessment-question-response-petroleum.dwl`** — Petroleum's version of `transform-assessment-question-response.dwl`, 6-question list instead of Jewelry's 7, with real values instead of all-null (see AQR mapping above). Date fields assume `M/d/yyyy` format, same unconfirmed assumption as `transform-bla-petroleum.dwl`'s `deposit_date`.
@@ -777,8 +784,10 @@ Everything not listed here (`transform-address.dwl`, `transform-contact.dwl`, `t
 ### Open items
 - `Trade__c` value for Petroleum — logged as dev question #9.
 - `registrationExpiry` real source/value for `PET_Delivery_Vehicles` — logged as dev question #10.
+- `ApplicationType` (New/Renewal) — no jobno to derive it from, logged as dev question #11.
 - Whether `MercStd`/`MercAR`'s date columns (`deposit_date`, `ins_expire_date`, `date_issued`) match Jewelry's `LaborAR.csv` format (`M/d/yyyy`, non-padded — see section 3's Date Format note) needs confirming once real data is available; `transform-bla-petroleum.dwl` and `transform-assessment-question-response-petroleum.dwl` currently assume they do.
 - **Needs verification in Studio**: confirm the CSV reader picks up headers correctly for all 4 truck files (`header: true`) and that `licenseno` comes through as the same type/format across `TruckReg01`/`02`/`TruckHis01`/`02` and `MercStd`/`MercAR` for the join/filter to match reliably.
+- No jobno anywhere in Petroleum means Jewelry's `AddInvoices`/`blaJobnoLog` join needs a licenseno-keyed equivalent (`blaLicenseLog`?) — not yet designed, see no-jobno note above.
 
 ---
 

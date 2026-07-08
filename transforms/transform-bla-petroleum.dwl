@@ -1,7 +1,6 @@
 %dw 2.0
 output application/java
 
-var jobno = vars.row.jobno default ""
 var licenseno = vars.row.licenseno default ""
 
 // AmountPaid = tot_pymt from the mercAr (MercAR.csv) record with the max deposit_date, matched by licenseno
@@ -15,7 +14,9 @@ var amountPaid = if (latestArRow != null) latestArRow.tot_pymt as Number else nu
 ---
 {
     AccountId: vars.accountId,
-    ApplicationType: if (jobno[-2 to -1] == "01") "New" else "Renewal",
+    // Placeholder — Jewelry derives New/Renewal from jobno's last 2 digits, but MercStd has no
+    // jobno field at all (licenseno-only) — see dev-questions.md for what should drive this
+    ApplicationType: "TBD",
     AmountPaid: amountPaid,
     Status: "Approved",
     // Placeholder — see dev-questions.md for what this should actually be
@@ -24,5 +25,5 @@ var amountPaid = if (latestArRow != null) latestArRow.tot_pymt as Number else nu
     // Placeholder — see dev-questions.md for what Trade__c should be for Petroleum
     Trade__c: "TBD",
     LicenseTypeId: vars.licenseTypeId,
-    Description: "Legacy Job Number: " ++ jobno
+    Description: "Legacy License Number: " ++ licenseno
 }
