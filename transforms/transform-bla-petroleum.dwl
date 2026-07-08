@@ -3,14 +3,14 @@ output application/java
 
 var licenseno = vars.row.licenseno default ""
 
-// AmountPaid = tot_pymt from the mercAr (MercAR.csv) record with the max deposit_date, matched by licenseno
+// AmountPaid = tot_pymt_amt from the MercAR.csv record with the max deposit_date, matched by licenseno
 var matchingArRows = vars.arRows filter (row) -> (row.licenseno default "") == licenseno
 
 var latestArRow = if (sizeOf(matchingArRows) > 0)
     (matchingArRows orderBy (row) -> row.deposit_date as Date {format: "M/d/yyyy"})[-1]
   else null
 
-var amountPaid = if (latestArRow != null) latestArRow.tot_pymt as Number else null
+var amountPaid = if (latestArRow != null) latestArRow.tot_pymt_amt as Number else null
 ---
 {
     AccountId: vars.accountId,
