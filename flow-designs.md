@@ -168,6 +168,8 @@ After the whole combined flow completes (including the `import_log.csv` write), 
 ### Trigger File — `LoadReadyFlag.csv`
 Rather than triggering on `LaborStd.csv` arrival directly, the flow triggers on a **sentinel file**, `LoadReadyFlag.csv`, created manually only after `LaborStd.csv` and `LaborAR.csv` are both fully in place in `C:\data\`. This avoids two race conditions: the poller picking up a data file mid-copy, and the labor_ar half of this flow running before the labor_std half has finished (they're now one combined flow — see below — but the trigger file still has to reflect "all inputs are ready" before anything starts).
 
+**TODO**: rename to `LoadReadyFlagJewelry.csv` — now that Petroleum has its own trigger file (`LoadReadyFlagPetroleum.csv`, see section 6), Jewelry's should follow the same `LoadReadyFlag<WorkUnit>.csv` convention instead of being the unqualified original name. Update the Access export button and this flow's File Name Pattern together when this happens.
+
 **The flag file cannot be empty.** `Min Size` must stay at `1` (established earlier — `Min Size: 0` causes the poller to only pick up empty files), so `LoadReadyFlag.csv` needs at least a byte of real content (e.g. a timestamp), not a zero-byte touch file.
 
 Since the trigger event's payload is `LoadReadyFlag.csv` itself, not the data files, the flow starts with explicit **File Read** operations for both CSVs rather than relying on the trigger payload.
@@ -654,7 +656,10 @@ Choice
 
 ## 6. Next Work Unit: Petroleum (In Progress)
 
-Source data is very similar to Jewelry — the `Petroleum` flow in Studio was copied from the Jewelry flow file as the starting point rather than built from scratch. **Naming note**: the client uses "Mercantile" and "Petroleum" interchangeably — source files are prefixed `Merc` (`MercStd`, `MercAR`), but the work unit/Salesforce-facing naming stays "Petroleum" throughout this doc.
+Source data is very similar to Jewelry — but the `Petroleum` flow is being **built from scratch** in Studio, not copied from Jewelry's flow file. A raw filesystem copy of `Jewelry.xml` to `Petroleum.xml` was tried first and caused Studio to treat the two as linked (editing a property in one changed the same property in the other — root cause not diagnosed, likely Studio project/global-element caching) — see [[project_anypoint_salesforce_connectivity]]. Slower to build by hand, but avoids that bug. **Naming note**: the client uses "Mercantile" and "Petroleum" interchangeably — source files are prefixed `Merc` (`MercStd`, `MercAR`), but the work unit/Salesforce-facing naming stays "Petroleum" throughout this doc.
+
+### Trigger File — `LoadReadyFlagPetroleum.csv`
+Own sentinel file, separate from Jewelry's (see TODO in section 2 to rename Jewelry's to match: `LoadReadyFlagJewelry.csv`) — same reasoning and settings as Jewelry's trigger (section 2): Min Size `1`, created only after `MercStd.csv`/`MercAR.csv` (and the four truck files) are fully in place.
 
 ### Work Units
 | File | Description |
