@@ -197,7 +197,7 @@ The combined flow is implemented as a main flow calling out to named sub-flows v
 | Sub-Flow | Responsibility |
 |---|---|
 | `InitAssessmentQuestionVersion` | Runs once (not per-row) — builds `vars.aqvMap`, the AssessmentQuestionVersion lookup used later by Assessment Question Response (`transform-aqv-lookup.dwl`) |
-| `InitAccountRecordType` | Runs once (not per-row) — queries the Account Record Type Id by `DeveloperName` (stable across sandbox refreshes, unlike a hardcoded Id) and sets `vars.accountRecordTypeId`, used by `transform2-account.dwl` |
+| `InitAccountRecordType` | **Planned, not actually built in Jewelry** — see note below the sub-flow body |
 | `AddAccount` | Salesforce Create Account, Result & Log Pattern; sets `accountId`. If `accountId != null`, also Choice-gated creates one Account_Status__c (filters the pre-parsed `vars.arRows` to this row's jobno, takes the oldest `deposit_date` — see section 5) |
 | `AddLocationsAndAddresses` | Location(s) → per-location Choice-gated Address__c → PartyAddress__c (see Flow Structure below) |
 | `AddContacts` | Contact list create (0-4), List Result & Log Pattern; independent, no gating |
@@ -219,14 +219,15 @@ Transform Message (transform-aqv-lookup.dwl — reduce over payload keyed by Nam
 Set Variable: aqvMap = #[payload]
 ```
 
-### InitAccountRecordType (sub-flow body)
+### InitAccountRecordType (sub-flow body — planned, never actually implemented in Jewelry)
+**Correction**: this was designed as the fix for a hardcoded `RecordTypeId` breaking after a sandbox refresh, but Jewelry's `AddAccount`/`transform2-account.dwl` still hardcodes the `RecordTypeId` directly today — this sub-flow was never built there. **TODO**: retrofit Jewelry to use this same query-based approach, so it stops breaking on sandbox refresh.
 ```
 Salesforce Query: SELECT Id FROM RecordType WHERE SobjectType = 'Account' AND DeveloperName = 'Business_Account'
 Set Variable: accountRecordTypeId = #[payload[0].Id]
 ```
 `DeveloperName` is a fixed constant known at design time (not row data), so it's embedded directly in the query text rather than bound as a parameter — the "never manually quote a bind parameter" rule (see Key Notes in section 1) only applies to values built from row/user data, not literals like this.
 
-**Why this exists**: a hardcoded `RecordTypeId` broke after a sandbox refresh (refreshes regenerate Salesforce record Ids). `DeveloperName` stays stable across refreshes, so querying by it once at flow start makes the flow resilient — same reasoning as `InitAssessmentQuestionVersion`.
+**Why this matters**: a hardcoded `RecordTypeId` breaks after a sandbox refresh (refreshes regenerate Salesforce record Ids — see [[project_anypoint_salesforce_connectivity]]). `DeveloperName` stays stable across refreshes, so querying by it once at flow start avoids that breakage. **Petroleum builds this sub-flow for real** (see section 6) since it's being built from scratch anyway — same `Business_Account` DeveloperName as Jewelry's hardcoded value.
 
 ### Mailing / Physical Location Rule
 If `add1` and `add2` are both non-null and one of them contains "PO Box", that one is the **Mailing** address and the other is the **Physical** address — two Location records are created (`transform-location.dwl`: `Name` = `"Mailing"` / `"Physical Location"`). Otherwise, a single `"Mailing"` Location is created covering the whole address.
@@ -769,7 +770,11 @@ Set Variable: aqvMap = #[payload]
 ```
 **Needs verification in Studio**: confirm these 6 `AssessmentQuestionVersion.Name` values (especially `PET_Delivery_Vehicles`'s underscores) exist and are `Status = 'Active'` before relying on this query.
 
-**InitAccountRecordType (Petroleum)** — confirmed: same `Business_Account` `DeveloperName` as Jewelry (section 2), query unchanged.
+**InitAccountRecordType (Petroleum)** — built fresh, since Jewelry never actually built this sub-flow (it hardcodes `RecordTypeId` instead — see the correction in section 2). Same `Business_Account` `DeveloperName`, same query as documented in section 2's sub-flow body:
+```
+Salesforce Query: SELECT Id FROM RecordType WHERE SobjectType = 'Account' AND DeveloperName = 'Business_Account'
+Set Variable: accountRecordTypeId = #[payload[0].Id]
+```
 Placed upfront, alongside the `LaborAR.csv` → `vars.arRows` read in the main Flow Structure (section 2) — parsed once before the main `For Each`, same "parse once, filter per-row inside the transform" pattern `vars.arRows` uses (no `SourceFileType` filtering needed here, same as `vars.arRows`'s `licenseno`-only matching in `transform-bla-petroleum.dwl`).
 
 #### `PET_Delivery_Vehicles` JSON shape (confirmed)
