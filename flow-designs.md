@@ -684,6 +684,8 @@ Own sentinel file, separate from Jewelry's (see TODO in section 2 to rename Jewe
 - `MercStd.csv`: `licenseno, processed, compname, respparty, add1, add2, city, state, zip, area_code, phone_no, contact_fname, contact_mi, contact_lname, contact_area_code, contact_telephone, email_addr, no_trucks, certificate, inspect_date, reinspect_date, no_insp_truck, no_non_truck, no_show, license_issued, insurance_agent, insurance_company, ins_expire_date, certif_dmv, certif_gu, date_issued, comments, batch_id` — no `jobno`, no `ID`
 - `MercAR.csv`: `licenseno, pymt_amt, pymt_type, check_date, check_no, bank_no, check_amt, bad_check_flag, mo_ord_no, mo_ord_date, mo_ord_amt, cash_recpt_no, cash_pymt_date, cash_amt, tot_pymt_amt, deposit_voucher, deposit_date, budget_acc1, budget_acc2` — no `jobno`. Note the field is `tot_pymt_amt`, not `tot_pymt` (fixed in `transform-bla-petroleum.dwl`, which had assumed the Jewelry/`LaborAR.csv` name).
 
+**`SourceFileType` still applies** — these field lists are the native MercStd/MercAR table columns; `SourceFileType` (`Current`/`Historical`) is a column manually appended during export, same pattern as Jewelry's `LaborAR.csv` (not the automated `ImportSourceData` flow, which only covers `LaborStd.csv`) — so `vars.row.SourceFileType` is available on every row read from the final `MercStd.csv`/`MercAR.csv`, same as Jewelry, even though it wasn't in the "native fields" list above.
+
 This ripples through several places that assumed a jobno, mirroring Jewelry too closely at first:
 - `transform-filter-and-name-petroleum.dwl` / `transform-ar-filter-and-name-petroleum.dwl` — filter/clean `licenseno` only, no jobno handling, no "ID" rename (fixed, see commit history)
 - `transform-location-petroleum.dwl` — `Description` reads "...Address for License No " ++ licenseno (was jobno)
@@ -706,7 +708,96 @@ File Read (Path: C:\data\MercAR.csv)
   → Set Variable: arRows = #[payload] (same var name as Jewelry's vars.arRows — already referenced
     by transform-bla-petroleum.dwl's AmountPaid lookup)
 ```
-Next: the vehicles file reads + `transform-vehicles-combine.dwl` join (see Vehicles Flow Structure above) feed into `vars.truckRows`, then `InitAssessmentQuestionVersion`/`InitAccountRecordType` sub-flows run once, then the main `For Each` over `vars.mercStdRows` starts — mirroring section 2's Flow Structure, minus `AddSentInvoice`.
+The vehicles file reads + `transform-vehicles-combine.dwl` join (see Vehicles Flow Structure above) feed into `vars.truckRows`, then `InitAssessmentQuestionVersionPetroleum`/`InitAccountRecordTypePetroleum` sub-flows run once (see above), then the main `For Each` over `vars.mercStdRows` starts.
+
+**Account/Contact field mismatches vs. Jewelry** — `MercStd.csv` has a very different shape than `LaborStd.csv` for these two objects, caught after assuming Jewelry's `transform2-account.dwl`/`transform-contact.dwl` fields would carry over:
+- **Account** (`transform-account-petroleum.dwl`, new file) — Jewelry's account fields (`fein`, `name`, `company`, `bustype`, `sic`) don't exist on `MercStd`. Petroleum only populates: `RecordTypeId` (`vars.accountRecordTypeId`), `Name` ← `compname`, `DBA_Name__c` ← `respparty`, `BillingStreet`/`BillingCity`/`BillingState`/`BillingPostalCode` (same `add1`+`add2`/`city`/`state`/`zip` logic as Jewelry, `stateNames` lookup duplicated in the new file). No `Federal_Tax_ID__c`, `Business_Entity_Type__c`, or `SicDesc` — left unset entirely, not even null.
+- **Contact** (`transform-contact-petroleum.dwl`, new file) — Jewelry's `respparty1`-`respparty4` free-text-with-title pattern doesn't apply; `MercStd` has exactly one already-structured contact: `contact_fname`/`contact_mi`/`contact_lname` (no parsing needed), `contact_area_code`+`contact_telephone` → `Phone` (format assumption: `"area-telephone"`, not yet confirmed), `email_addr` → `Email` (Jewelry's Contact creation never sets one), `Title` hardcoded `"Petroleum"` (not derived, unlike Jewelry's title-parsing). **Only created if `contact_fname` or `contact_lname` is non-blank** — unlike Jewelry's up-to-4 loop, this is a single optional Contact, so the transform returns `[]` (not a list with a mostly-empty record) when both are blank.
+
+**Issue-date equivalent** — Jewelry's `transform-business-license.dwl`/`transform-assessment.dwl`/`transform-partyaddress.dwl` all derive their date fields from `vars.row.issue_date`, which doesn't exist on `MercStd` either. Confirmed: use `date_issued` for all three (same field already used for the "PET Date App Received" AQR question) — new files `transform-business-license-petroleum.dwl`, `transform-assessment-petroleum.dwl`, `transform-partyaddress-petroleum.dwl`, otherwise identical to Jewelry's, `M/d/yyyy` format per the existing MercStd date-format assumption (not Jewelry's `MM/dd/yyyy`).
+
+**Account_Status__c** (`transform-account-status-petroleum.dwl`, new file) — same oldest-`deposit_date`-among-matching-`vars.arRows` logic as Jewelry's `transform-account-status.dwl`, just matched by `licenseno` instead of `jobno`.
+
+**Reused as-is, no Petroleum variant needed**: `transform-address.dwl` (Address__c — no jobno/issue_date reference, `add1`/`add2`/`city`/`state`/`zip` all present on `MercStd`), `transform-location-results.dwl` (pure Create-response mapping, no row fields).
+
+**`vars.licenseTypeId`** — referenced by both `transform-bla-petroleum.dwl` and `transform-business-license-petroleum.dwl`, but how it gets set is still an open question for Jewelry too (dev question #1, unresolved) — Petroleum has the same dependency, not a new gap.
+
+**`blaLicenseLog`, not `blaJobnoLog`** — Petroleum's equivalent of Jewelry's `blaJobnoLog` is keyed by `licenseno` instead of `jobno`; used later by a licenseno-keyed `AddInvoices` equivalent (not yet built, see earlier note).
+
+**Log entries use `licenseno` under the existing `jobno` column** — rather than changing the `import_log` table/CSV schema, Petroleum's `logEntries` appends keep the same shape as Jewelry's (`jobno, object, status, salesforce_id, error_code, error_message`) and just put `vars.row.licenseno` in the `jobno` slot — a deliberate reuse of the generic "row business key" column, not a mistake.
+
+### Flow Structure — main `For Each` (Petroleum)
+```
+For Each row: (Collection: #[vars.mercStdRows])
+    → Set Variable: row = #[payload]
+
+    → Flow Reference: AddAccountPetroleum
+        → Transform Message (transform-account-petroleum.dwl)
+        → Salesforce Create Account (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+          object: "Account"; sets accountId] (jobno slot in logEntries = vars.row.licenseno)
+        → Choice
+            When #[vars.accountId != null]:
+                → Transform Message (transform-account-status-petroleum.dwl)
+                → Salesforce Create Account_Status__c (Records: #[[payload]]) → [Result & Log
+                  Pattern → logEntries, object: "Account_Status__c"]
+            Otherwise: (skip)
+
+    → Flow Reference: AddLocationsAndAddressesPetroleum
+        → Transform Message (transform-location-petroleum.dwl — 1 or 2 items)
+        → Set Variable: locationList = payload
+        → Salesforce Create Location(s): Records = vars.locationList
+        → Transform Message (transform-location-results.dwl — reused, unchanged)
+        → Set Variable: locationResults = payload
+        → For Each (Collection: #[vars.locationResults]):
+            → Set Variable (locationId = #[payload.locationId])
+            → Set Variable (addressType = #[payload.addressType])
+            → Set Variable: logEntries = (vars.logEntries default []) ++ [{ jobno: vars.row.licenseno,
+              object: "Location", status: if (payload.success) "Success" else "Failed",
+              salesforce_id: vars.locationId, error_code: payload.errorCode, error_message: payload.errorMessage }]
+            → Choice
+                When #[vars.locationId != null]:
+                    → Transform Message (transform-address.dwl — reused, unchanged) → Salesforce
+                      Create Address__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+                      object: "Address__c"; sets addressId]
+                    → Choice
+                        When #[vars.addressId != null]:
+                            → Transform Message (transform-partyaddress-petroleum.dwl) → Salesforce
+                              Create PartyAddress__c (Records: #[[payload]]) → [Result & Log Pattern
+                              → logEntries, object: "PartyAddress__c"]
+                        Otherwise: (skip — Address failed)
+                Otherwise: (skip — Location failed, Address/PartyAddress not attempted)
+
+    → Flow Reference: AddContactsPetroleum
+        → Transform Message (transform-contact-petroleum.dwl — 0 or 1 Contact, see field mismatch
+          note above)
+        → Salesforce Create Contact (Records: #[payload]) → [List Result & Log Pattern → logEntries,
+          object: "Contact"] (independent — no gating)
+
+    → Flow Reference: AddBusinessLicenseAppPetroleum
+        → Transform Message (transform-bla-petroleum.dwl)
+        → Salesforce Create Business License Application (AccountId = accountId, Records: #[[payload]])
+          → [Result & Log Pattern → logEntries, object: "BusinessLicenseApplication"; sets blaId]
+        → Choice
+            When #[vars.blaId != null]:
+                → Set Variable: blaLicenseLog = (vars.blaLicenseLog default []) ++ [{ licenseno:
+                  vars.row.licenseno, blaId: vars.blaId, accountId: vars.accountId, sourceFileType:
+                  vars.row.SourceFileType }]
+                → Transform Message (transform-business-license-petroleum.dwl) → Salesforce Create
+                  Business License (linked to blaId, Records: #[[payload]]) → [Result & Log Pattern
+                  → logEntries, object: "BusinessLicense"]
+                → Transform Message (transform-assessment-petroleum.dwl) → Salesforce Create Assessment
+                  (linked to blaId, Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+                  object: "Assessment"; sets assessmentId]
+                → Transform Message (transform-vehicles-petroleum.dwl) → Set Variable:
+                  deliveryVehiclesJson = #[payload] (must run before the AQR transform below, which
+                  reads vars.deliveryVehiclesJson)
+                → Transform Message (transform-assessment-question-response-petroleum.dwl — uses
+                  vars.assessmentId, vars.aqvMap, vars.deliveryVehiclesJson; builds list of 6)
+                → Salesforce Create Assessment Question Response (Records: #[payload]) → [List Result
+                  & Log Pattern → logEntries, object: "AssessmentQuestionResponse"]
+            Otherwise: (skip — BLA failed, BL/Assessment/AQR not attempted)
+```
+Not yet built: the file-write steps (`import_log.csv`, processed-file archiving) and the licenseno-keyed `AddInvoices` equivalent — see open items below.
 
 **Do not carry over `AddSentInvoice`** (section 4) — that's a one-time Jewelry cutover requirement (old-system invoices with no AR payment record), not a general pattern. Strip it, its Flow Reference call, the `blaJobnoLog`-filter-to-Current step, and `transform-sent-invoice.dwl`/`transform-sent-invoiceline.dwl` out of the copied flow.
 
@@ -804,14 +895,20 @@ Petroleum's question list (order given, replaces Jewelry's 7-question fixed list
 | 6 | PET_Delivery_Vehicles | JSON string built by `transform-vehicles-petroleum.dwl` (see below) |
 
 ### Petroleum-specific transforms (new files, Jewelry's originals untouched)
-Everything not listed here (`transform-address.dwl`, `transform-contact.dwl`, `transform-invoice.dwl`, `transform-payment.dwl`, etc.) is unchanged from Jewelry and reused as-is in the copied flow.
+Everything not listed here (`transform-address.dwl`, `transform-location-results.dwl`, `transform-invoice.dwl`, `transform-payment.dwl`, etc.) is unchanged from Jewelry and reused as-is.
 
+- **`transform-account-petroleum.dwl`** — replaces `transform2-account.dwl`; only `RecordTypeId`, `Name` (← `compname`), `DBA_Name__c` (← `respparty`), and the `Billing*` fields are populated — see Account/Contact mismatch note above.
+- **`transform-contact-petroleum.dwl`** — replaces `transform-contact.dwl`; single structured contact (`contact_fname`/`contact_mi`/`contact_lname`/`contact_area_code`+`contact_telephone`/`email_addr`), hardcoded `Title: "Petroleum"`, only created when `contact_fname` or `contact_lname` is non-blank — see mismatch note above.
+- **`transform-account-status-petroleum.dwl`** — replaces `transform-account-status.dwl`; same oldest-`deposit_date` logic, matched by `licenseno` instead of `jobno`.
 - **`transform-location-petroleum.dwl`** — same as `transform-location.dwl`, `Description` literal changed from `"Jewelry "` to `"Petroleum "`, and reads `"...Address for License No " ++ licenseno` instead of `"...Job No " ++ jobno` (MercStd has no jobno — see the no-jobno note above).
+- **`transform-partyaddress-petroleum.dwl`** — replaces `transform-partyaddress.dwl`; `Effective_From__c` reads `date_issued` instead of `issue_date` (MercStd has no `issue_date` — see issue-date note above).
 - **`transform-bla-petroleum.dwl`** — differs from `transform-bla.dwl` in several fields:
   - `Trade__c` — hardcoded to `"TBD"` placeholder (real value not yet decided — see dev question #9).
   - `ApplicationType` — hardcoded to `"TBD"` placeholder; no jobno to derive New/Renewal from — see dev question #11.
   - `Description` reads `"Legacy License Number: " ++ licenseno` instead of `"Legacy Job Number: " ++ jobno`.
   - `AmountPaid` — **not** hardcoded to `0` like Jewelry. Business rule: the `tot_pymt_amt` from the `MercAR` (AR) record with the **max** `deposit_date`, matched by `licenseno`. Implemented by filtering `vars.arRows` (Petroleum's pre-parsed AR rows, same "parse once upfront" pattern as Jewelry's `vars.arRows` — see section 2's Flow Structure and section 5) to `licenseno` matches, then taking the row with the latest `deposit_date` — mirror image of `transform-account-status.dwl`'s oldest-date logic (section 5), just `[-1]` (last, since `orderBy` is ascending) instead of `[0]`.
+- **`transform-business-license-petroleum.dwl`** — replaces `transform-business-license.dwl`; `date_issued` instead of `issue_date`, `licenseno` instead of `jobno` throughout (`Name: "CS-" ++ licenseno`, `Legacy_License_Number__c: licenseno`), `Status` still driven by `vars.row.SourceFileType` (confirmed present, see SourceFileType note above).
+- **`transform-assessment-petroleum.dwl`** — replaces `transform-assessment.dwl`; `date_issued` instead of `issue_date`, otherwise identical.
 - **`transform-vehicles-combine.dwl`** — joins the `01`/`02` truck file pairs on `licenseno` into one row per license; reused once for the Current pair and once for the Historical pair (see Vehicles Flow Structure above).
 - **`transform-vehicles-petroleum.dwl`** — builds the `PET_Delivery_Vehicles` JSON string (see shape above) from `vars.truckRows` filtered to the current `vars.row.licenseno`. Output of a dedicated Transform Message step, stored as `vars.deliveryVehiclesJson`, ahead of the AQR transform — same "compute once, stash in a var" shape as `vars.aqvMap`/`vars.arRows`.
 - **`transform-assessment-question-response-petroleum.dwl`** — Petroleum's version of `transform-assessment-question-response.dwl`, 6-question list instead of Jewelry's 7, with real values instead of all-null (see AQR mapping above). Date fields assume `M/d/yyyy` format, same unconfirmed assumption as `transform-bla-petroleum.dwl`'s `deposit_date`.
@@ -823,6 +920,8 @@ Everything not listed here (`transform-address.dwl`, `transform-contact.dwl`, `t
 - Whether `MercStd`/`MercAR`'s date columns (`deposit_date`, `ins_expire_date`, `date_issued`) match Jewelry's `LaborAR.csv` format (`M/d/yyyy`, non-padded — see section 3's Date Format note) needs confirming once real data is available; `transform-bla-petroleum.dwl` and `transform-assessment-question-response-petroleum.dwl` currently assume they do.
 - **Needs verification in Studio**: confirm the CSV reader picks up headers correctly for all 4 truck files (`header: true`) and that `licenseno` comes through as the same type/format across `TrucksReg01`/`02`/`TrucksHis01`/`02` and `MercStd`/`MercAR` for the join/filter to match reliably.
 - No jobno anywhere in Petroleum means Jewelry's `AddInvoices`/`blaJobnoLog` join needs a licenseno-keyed equivalent (`blaLicenseLog`?) — not yet designed, see no-jobno note above.
+- Contact `Phone` format (`area_code-telephone`) is an unconfirmed assumption — no existing convention elsewhere in the codebase to match (Jewelry's Contact never sets Phone).
+- `vars.licenseTypeId` — how this gets set is still open for Jewelry too (dev question #1); Petroleum has the same dependency, not a new gap.
 
 ---
 
