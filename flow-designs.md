@@ -667,6 +667,25 @@ Own sentinel file, separate from Jewelry's (see TODO in section 2 to rename Jewe
 | `MercStd.csv` | Petroleum equivalent of `LaborStd.csv` |
 | `MercAR.csv` | Petroleum equivalent of `LaborAR.csv` |
 
+### Flow Structure (in progress — built incrementally in Studio, this reflects current state)
+```
+On New or Updated File (C:\data\, LoadReadyFlagPetroleum.csv)
+
+File Read (Path: C:\data\MercStd.csv)
+  → Transform Message (transform-filter-and-name-petroleum.dwl — same quirks as LaborStd.csv:
+    filters rows with an invalid jobno, strips Access's ".0" decimal suffix off jobno and
+    licenseno, renames the source "ID" column to lowercase "id")
+  → Set Variable: mercStdRows = #[payload]
+
+File Read (Path: C:\data\MercAR.csv)
+  → Transform Message (transform-ar-filter-and-name-petroleum.dwl — same quirks as LaborAR.csv:
+    filters/cleans jobno and licenseno the same way, sorts by deposit_date ascending; no "ID"
+    rename, matching LaborAR.csv's transform which doesn't have that column)
+  → Set Variable: arRows = #[payload] (same var name as Jewelry's vars.arRows — already referenced
+    by transform-bla-petroleum.dwl's AmountPaid lookup)
+```
+Next: the vehicles file reads + `transform-vehicles-combine.dwl` join (see Vehicles Flow Structure above) feed into `vars.truckRows`, then `InitAssessmentQuestionVersion`/`InitAccountRecordType` sub-flows run once, then the main `For Each` over `vars.mercStdRows` starts — mirroring section 2's Flow Structure, minus `AddSentInvoice`.
+
 **Do not carry over `AddSentInvoice`** (section 4) — that's a one-time Jewelry cutover requirement (old-system invoices with no AR payment record), not a general pattern. Strip it, its Flow Reference call, the `blaJobnoLog`-filter-to-Current step, and `transform-sent-invoice.dwl`/`transform-sent-invoiceline.dwl` out of the copied flow.
 
 **Vehicles** — there's an additional source file listing vehicles, which adds data to a couple of the Assessment Question Responses. Unlike the Jewelry AQR transform (`transform-assessment-question-response.dwl`), which maps a fixed static list of 7 questions, Petroleum's AQR will need to handle **per-vehicle repetition** for whichever questions the vehicle data feeds — similar in shape to how Contacts handle "up to 4" respparty entries (`transform-contact.dwl`), not a fixed-count list.
