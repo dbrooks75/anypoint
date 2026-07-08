@@ -207,6 +207,18 @@ The combined flow is implemented as a main flow calling out to named sub-flows v
 
 `InitAssessmentQuestionVersion` and `InitAccountRecordType` both run once at the start of the flow (before the labor_std `For Each`); the other sub-flows are called per-row (or, for `AddInvoices`, per-file) from within the relevant loop.
 
+### InitAssessmentQuestionVersion (sub-flow body)
+```
+Salesforce Query: SELECT Id, QuestionText, Name, VersionNumber FROM AssessmentQuestionVersion
+                   WHERE Name IN (<Jewelry's 7 question names>) AND Status = 'Active'
+                   ORDER BY Name ASC, VersionNumber ASC
+Transform Message (transform-aqv-lookup.dwl — reduce over payload keyed by Name; since results
+  are ordered by VersionNumber ASC within each Name, each reduce step overwrites the previous
+  entry for that Name, so the map ends up holding the highest/latest VersionNumber per question
+  — a cheap way to get "latest active version per question" without a subquery)
+Set Variable: aqvMap = #[payload]
+```
+
 ### InitAccountRecordType (sub-flow body)
 ```
 Salesforce Query: SELECT Id FROM RecordType WHERE SobjectType = 'Account' AND DeveloperName = 'Business_Account'
@@ -744,6 +756,20 @@ Transform Message (transform-vehicles-combine.dwl — same transform, reused)
 
 Set Variable: truckRows = #[vars.currentTruckRows ++ vars.historicalTruckRows]
 ```
+
+**InitAssessmentQuestionVersion (Petroleum)** — own sub-flow, not shared with Jewelry's, since it needs a different `Name IN (...)` list (Petroleum's 6 questions vs Jewelry's 7). Same query shape and same `transform-aqv-lookup.dwl` reused (see section 2's version of this sub-flow for why the `ORDER BY ... VersionNumber ASC` + reduce-overwrite pattern gets the latest active version per question):
+```
+Salesforce Query: SELECT Id, QuestionText, Name, VersionNumber FROM AssessmentQuestionVersion
+                   WHERE Name IN ('PET Name on Vehicle Different', 'PET Name on Vehicle',
+                   'PET Insurance Company', 'PET Policy Expiration', 'PET Date App Received',
+                   'PET_Delivery_Vehicles') AND Status = 'Active'
+                   ORDER BY Name ASC, VersionNumber ASC
+Transform Message (transform-aqv-lookup.dwl — same transform, reused)
+Set Variable: aqvMap = #[payload]
+```
+**Needs verification in Studio**: confirm these 6 `AssessmentQuestionVersion.Name` values (especially `PET_Delivery_Vehicles`'s underscores) exist and are `Status = 'Active'` before relying on this query.
+
+**InitAccountRecordType (Petroleum)** — confirmed: same `Business_Account` `DeveloperName` as Jewelry (section 2), query unchanged.
 Placed upfront, alongside the `LaborAR.csv` → `vars.arRows` read in the main Flow Structure (section 2) — parsed once before the main `For Each`, same "parse once, filter per-row inside the transform" pattern `vars.arRows` uses (no `SourceFileType` filtering needed here, same as `vars.arRows`'s `licenseno`-only matching in `transform-bla-petroleum.dwl`).
 
 #### `PET_Delivery_Vehicles` JSON shape (confirmed)
