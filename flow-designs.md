@@ -689,15 +689,27 @@ Repeating columns — one set of 5 per truck slot, column names suffixed `N` (**
 
 Slot numbering is continuous across the two files, not restarting: `N = 1-39` in `TruckReg01`/`TruckHis01`, `N = 40-56` in `TruckReg02`/`TruckHis02` — so up to **56 truck slots per license**, split 39/17 across the two files. A license with fewer than 56 actual trucks leaves the remaining slot columns blank — the transform needs to filter those out, not create 56 empty vehicle entries per license.
 
-**Open design questions before this can be built** (see conversation — not yet resolved):
-- How to detect a populated vs. empty truck slot (e.g. `reg_truck_numbN` non-blank) to filter out unused slots for licenses with fewer than 56 trucks.
-- How `TruckReg01`/`TruckReg02` (and their Historical counterparts) get combined — presumably joined on `licenseno` per row, same as the `01`/`02` split — before being usable per-BLA in the flow.
-- Exact JSON shape expected in the `PET_Delivery_Vehicles` AQR value (see below) — array of `{make, year, reg_truck_numb, equipment_no, test_sealed}` objects is the assumed shape, not yet confirmed.
+A truck slot `N` is considered populated (included in the output) if any of `truck_makeN`, `yearN`, or `reg_truck_numbN` is non-null — `equipment_no` and `test_sealed` are **not used** anywhere in the Petroleum load and can be ignored.
+
+**Still open**: how `TruckReg01`/`TruckReg02` (and their Historical counterparts) get combined into one row per `licenseno` — presumably joined per row, same as the `01`/`02` split — before being usable per-BLA in the flow. Implemented in `transform-vehicles-petroleum.dwl` as `vars.truckRows` (read: already joined, pre-parsed once upfront, same pattern as `vars.arRows`) — the join itself isn't built yet.
+
+#### `PET_Delivery_Vehicles` JSON shape (confirmed)
+The AQR field is a long text field — value is a JSON **string** (`write(..., "application/json")`), not a structured field. Confirmed shape is `{rows: [...], columns: [...]}`:
+
+- `rows` — one object per populated truck slot: `{inService, vin, registrationExpiry, state, plateNumber, model, year, make}`. Mapping from source:
+  - `make` ← `truck_makeN`, `year` ← `yearN`, `plateNumber` ← `reg_truck_numbN`
+  - `vin`, `model` — hardcoded `""` (no source data)
+  - `state` — hardcoded `"RI"`
+  - `inService` — hardcoded `true` for every truck
+  - `registrationExpiry` — **hardcoded placeholder** `"2026-04-09"`, real source unknown — logged as dev question #10
+- `columns` — static metadata, identical on every record (field type/name/label for each of the 8 `rows` keys, for whatever UI renders this JSON) — see `transform-vehicles-petroleum.dwl` for the exact literal.
+
+Implemented in `transform-vehicles-petroleum.dwl`, output `vars.deliveryVehiclesJson` (a Transform Message step ahead of the AQR transform), consumed by `transform-assessment-question-response-petroleum.dwl`'s `PET_Delivery_Vehicles` question as `ResponseText`.
 
 #### Assessment Question Response (AQR) mapping
 Like Jewelry, each Account gets a BLA, an Assessment, and a set of AQRs (`transform-assessment-question-response.dwl` pattern). **Difference from Jewelry**: Petroleum's AQRs get real values fed in, where Jewelry currently sends `null` for every response field regardless of question (see `transform-assessment-question-response.dwl` — all of `CurrencyValue`/`DateValue`/`IntegerResponseValue`/`ChoiceValue`/`ResponseText` are hardcoded `null`).
 
-Petroleum's question list (order given, replaces Jewelry's 7-question fixed list — will need its own `transform-assessment-question-response-petroleum.dwl`):
+Petroleum's question list (order given, replaces Jewelry's 7-question fixed list — implemented in `transform-assessment-question-response-petroleum.dwl`):
 | # | Question | Value |
 |---|---|---|
 | 1 | PET Name on Vehicle Different | hardcoded `false` (like Jewelry's nulls) |
@@ -705,7 +717,7 @@ Petroleum's question list (order given, replaces Jewelry's 7-question fixed list
 | 3 | PET Insurance Company | `MercStd.insurance_company` |
 | 4 | PET Policy Expiration | `MercStd.ins_expire_date` |
 | 5 | PET Date App Received | `MercStd.date_issued` |
-| 6 | PET_Delivery_Vehicles | **tricky one** — a JSON array of trucks, built from the truck tables (see open question above on exact shape) |
+| 6 | PET_Delivery_Vehicles | JSON string built by `transform-vehicles-petroleum.dwl` (see below) |
 
 ### Petroleum-specific transforms (new files, Jewelry's originals untouched)
 Everything not listed here (`transform-address.dwl`, `transform-contact.dwl`, `transform-invoice.dwl`, `transform-payment.dwl`, etc.) is unchanged from Jewelry and reused as-is in the copied flow.
@@ -714,11 +726,14 @@ Everything not listed here (`transform-address.dwl`, `transform-contact.dwl`, `t
 - **`transform-bla-petroleum.dwl`** — differs from `transform-bla.dwl` in two fields:
   - `Trade__c` — hardcoded to `"TBD"` placeholder (real value not yet decided — see dev question).
   - `AmountPaid` — **not** hardcoded to `0` like Jewelry. Business rule: the `tot_pymt` from the `MercAR` (AR) record with the **max** `deposit_date`, matched by `licenseno` (not `jobno` — `MercStd`/`MercAR` rows carry a `licenseno` field specifically for this lookup). Implemented by filtering `vars.arRows` (Petroleum's pre-parsed AR rows, same "parse once upfront" pattern as Jewelry's `vars.arRows` — see section 2's Flow Structure and section 5) to `licenseno` matches, then taking the row with the latest `deposit_date` — mirror image of `transform-account-status.dwl`'s oldest-date logic (section 5), just `[-1]` (last, since `orderBy` is ascending) instead of `[0]`.
+- **`transform-vehicles-petroleum.dwl`** — builds the `PET_Delivery_Vehicles` JSON string (see shape above) from `vars.truckRows` filtered to the current `vars.row.licenseno`. Output of a dedicated Transform Message step, stored as `vars.deliveryVehiclesJson`, ahead of the AQR transform — same "compute once, stash in a var" shape as `vars.aqvMap`/`vars.arRows`.
+- **`transform-assessment-question-response-petroleum.dwl`** — Petroleum's version of `transform-assessment-question-response.dwl`, 6-question list instead of Jewelry's 7, with real values instead of all-null (see AQR mapping above). Date fields assume `M/d/yyyy` format, same unconfirmed assumption as `transform-bla-petroleum.dwl`'s `deposit_date`.
 
 ### Open items
 - `Trade__c` value for Petroleum — logged as dev question #9.
-- Vehicles file layout / AQR per-vehicle repetition — deferred, see Vehicles note above.
-- Whether `MercStd`/`MercAR`'s `deposit_date` format matches Jewelry's `LaborAR.csv` (`M/d/yyyy`, non-padded — see section 3's Date Format note) needs confirming once real data is available; `transform-bla-petroleum.dwl` currently assumes it does.
+- `registrationExpiry` real source/value for `PET_Delivery_Vehicles` — logged as dev question #10.
+- How `TruckReg01`/`TruckReg02` (and Historical counterparts) get joined per `licenseno` into `vars.truckRows` — not yet built, see Vehicles note above.
+- Whether `MercStd`/`MercAR`'s date columns (`deposit_date`, `ins_expire_date`, `date_issued`) match Jewelry's `LaborAR.csv` format (`M/d/yyyy`, non-padded — see section 3's Date Format note) needs confirming once real data is available; `transform-bla-petroleum.dwl` and `transform-assessment-question-response-petroleum.dwl` currently assume they do.
 
 ---
 

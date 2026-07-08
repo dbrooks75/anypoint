@@ -9,3 +9,4 @@
 7. AssessmentQuestionResponse.ResponseType throws INVALID_FIELD_FOR_INSERT_UPDATE — seems to be set by a trigger. What are the rules for how it gets set, and do we need to do anything on our end (e.g. pre-populate AssessmentQuestionVersion) for it to come out right?
 8. BusinessLicenseApplication.AppliedDate is required but we don't have a real source value for it (previously derived from issue_date, which isn't the right field). Currently hardcoded to a 1/1/1900 placeholder in transform-bla.dwl — what should this actually be?
 9. Petroleum: what should BusinessLicenseApplication.Trade__c be? Jewelry hardcodes "Labor Standards" — currently hardcoded to a "TBD" placeholder in transform-bla-petroleum.dwl.
+10. Petroleum: what is the real source/value for each vehicle's `registrationExpiry` in the PET_Delivery_Vehicles JSON? Currently hardcoded to a `"2026-04-09"` placeholder in transform-vehicles-petroleum.dwl (same treatment as the AppliedDate placeholder in #8).
