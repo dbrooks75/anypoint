@@ -8,6 +8,8 @@ Upstream of every Mule flow in this file: how the client's raw data becomes the 
 
 **`ExportCandidates` table + `IsExported` flag** — each work unit's Access database has an `ExportCandidates` table that joins against the other source tables, with an `IsExported` flag used to limit which records get included in a given export run. This is how test runs with a small number of accounts (e.g. the 2-account batch test that surfaced the `AddSentInvoice` bug) get scoped — not a separate test database, just fewer rows flagged for export in the same one.
 
+**Access import settings** — when importing a prepared `.csv` into Access, check **"First Row Contains Field Names"** and set **Text Qualifier = `"`**. Easy to miss/default-wrong on Access's import wizard; get these wrong and either the header row imports as a data row, or quoted fields (e.g. an address containing a comma) split incorrectly.
+
 ### Incoming leg — client files → Access
 The client's **initial** data delivery (covering all work units — Jewelry, Petroleum, BiWeekly) was one `.xlsx` file per source table, each with a header row. **Going forward**, incoming files arrive as **`.unl`, pipe-delimited, no header row** instead — same column shape as the originals otherwise. This only affects how these files get imported into Access; it does not touch the Mule-facing CSVs (see outgoing leg below).
 
