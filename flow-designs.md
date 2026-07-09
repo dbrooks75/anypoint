@@ -4,6 +4,10 @@
 
 Upstream of every Mule flow in this file: how the client's raw data becomes the CSVs the flows actually read. Two distinct legs, in and out of Access — don't conflate their formats:
 
+**General shape, across all work units**: client files arrive as pipe-delimited `.unl` (no header row) → opened in Excel, reheadered, saved as `.csv` → imported into Access for analysis/prep → Access queries produce the CSVs the Mule flows actually consume, exported via an Access form button, with the `LoadReadyFlag*.csv` sentinel written last. **Each work unit has its own Access database** (Jewelry, Petroleum, BiWeekly are separate databases, not separate tables in one).
+
+**`ExportCandidates` table + `IsExported` flag** — each work unit's Access database has an `ExportCandidates` table that joins against the other source tables, with an `IsExported` flag used to limit which records get included in a given export run. This is how test runs with a small number of accounts (e.g. the 2-account batch test that surfaced the `AddSentInvoice` bug) get scoped — not a separate test database, just fewer rows flagged for export in the same one.
+
 ### Incoming leg — client files → Access
 The client's **initial** data delivery (covering all work units — Jewelry, Petroleum, BiWeekly) was one `.xlsx` file per source table, each with a header row. **Going forward**, incoming files arrive as **`.unl`, pipe-delimited, no header row** instead — same column shape as the originals otherwise. This only affects how these files get imported into Access; it does not touch the Mule-facing CSVs (see outgoing leg below).
 
@@ -804,7 +808,7 @@ Not yet built: the file-write steps (`import_log.csv`, processed-file archiving)
 **Vehicles** — there's an additional source file listing vehicles, which adds data to a couple of the Assessment Question Responses. Unlike the Jewelry AQR transform (`transform-assessment-question-response.dwl`), which maps a fixed static list of 7 questions, Petroleum's AQR will need to handle **per-vehicle repetition** for whichever questions the vehicle data feeds — similar in shape to how Contacts handle "up to 4" respparty entries (`transform-contact.dwl`), not a fixed-count list.
 
 #### Vehicles source file layout (wide/denormalized)
-Four files, all sharing the same column shape — `TrucksReg01`/`TrucksReg02` (Current) and `TrucksHis01`/`TrucksHis02` (Historical), same relationship as `LaborStd`/`HisLaborStd`. The `01`/`02` split exists because the underlying source table was too wide to fit into Access for analysis as a single import, **not** because it's two logical tables — `01` and `02` together are one row per license.
+Four files, all sharing the same column shape — `TrucksReg01`/`TrucksReg02` (Current) and `TrucksHis01`/`TrucksHis02` (Historical), same relationship as `LaborStd`/`HisLaborStd`. The `01`/`02` split exists because the underlying source table was too wide to fit into Access for analysis as a single import, **not** because it's two logical tables — `01` and `02` together are one row per license. **Confirmed**: the split happens in **Excel** (part of the general `.unl` → Excel → Access leg — see section 0), not in Access — `01` gets the columns up through truck slot 39, `02` gets the remaining truck slots plus the trailing non-truck columns (`tot_reg_trucks`, `batch_id`).
 
 Non-repeating columns (present once per row) — confirmed same on `TrucksReg01`/`TrucksHis01`:
 | Column | Notes |
