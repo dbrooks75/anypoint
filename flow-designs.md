@@ -932,6 +932,7 @@ Everything not listed here (`transform-address.dwl`, `transform-location-results
 - No jobno anywhere in Petroleum means Jewelry's `AddInvoices`/`blaJobnoLog` join needs a licenseno-keyed equivalent (`blaLicenseLog`?) — not yet designed, see no-jobno note above.
 - Contact `Phone` format (`area_code-telephone`) is an unconfirmed assumption — no existing convention elsewhere in the codebase to match (Jewelry's Contact never sets Phone).
 - `vars.licenseTypeId` — how this gets set is still open for Jewelry too (dev question #1); Petroleum has the same dependency, not a new gap.
+- **TODO**: merge Historical into Current for `MercStd`/`MercAR` (i.e. `MercStdHis` → `MercStd`, `MercARHis` → `MercAR`), with `SourceFileType` set appropriately per row — the Access-side step that produces the final `SourceFileType`-tagged `MercStd.csv`/`MercAR.csv` Mule actually reads (see SourceFileType note above) hasn't been done yet.
 
 ---
 
