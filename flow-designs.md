@@ -10,6 +10,8 @@ Upstream of every Mule flow in this file: how the client's raw data becomes the 
 
 **Access import settings** — when importing a prepared `.csv` into Access, check **"First Row Contains Field Names"** and set **Text Qualifier = `"`**. Easy to miss/default-wrong on Access's import wizard; get these wrong and either the header row imports as a data row, or quoted fields (e.g. an address containing a comma) split incorrectly.
 
+**Plate/reg number columns must be imported as Text, not Number** — e.g. `reg_plate_no1` (and by extension the rest of the `reg_truck_numbN`/`reg_plate_numbN` slot columns, see Petroleum vehicles section) needs its Access field type set to Text. Left as Number, Access/Excel auto-typing silently strips leading zeros and mangles any non-numeric plate values — a classic Access import gotcha, not specific to this one column.
+
 ### Incoming leg — client files → Access
 The client's **initial** data delivery (covering all work units — Jewelry, Petroleum, BiWeekly) was one `.xlsx` file per source table, each with a header row. **Going forward**, incoming files arrive as **`.unl`, pipe-delimited, no header row** instead — same column shape as the originals otherwise. This only affects how these files get imported into Access; it does not touch the Mule-facing CSVs (see outgoing leg below).
 
