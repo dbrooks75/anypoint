@@ -812,7 +812,51 @@ For Each row: (Collection: #[vars.mercStdRows])
                   & Log Pattern → logEntries, object: "AssessmentQuestionResponse"]
             Otherwise: (skip — BLA failed, BL/Assessment/AQR not attempted)
 ```
-Not yet built: the file-write steps (`import_log.csv`, processed-file archiving) and the licenseno-keyed `AddInvoices` equivalent — see open items below.
+Not yet built: the `import_log.csv`/processed-file-archiving writes — see open items below. The `blaLicenseLog` audit write (below) is built.
+
+Right after the main `For Each` completes (same position as Jewelry's `bla_jobno_map.csv` write relative to its `AddInvoices` call), before `Flow Reference: AddInvoicesPetroleum`:
+```
+File Write: C:\data\bla_license_map.csv (overwrite, content = #[vars.blaLicenseLog as CSV] —
+  debug/audit artifact, same as Jewelry's bla_jobno_map.csv; AddInvoicesPetroleum uses
+  vars.blaLicenseLog directly in memory, no read-back needed)
+```
+
+### AddInvoicesPetroleum sub-flow
+Licenseno-keyed equivalent of Jewelry's `AddInvoices` (section 3) — same grain (1 row = 1 Invoice__c = 1 InvoiceLine__c = 1 Payment__c), same `pymt_type` discriminator (`K`/`C`/`M` → Check/Cash/Money Order), called once via Flow Reference after the main `For Each` (and the `bla_license_map.csv` write above) complete, reading `vars.mercArRows` (already parsed/sorted oldest-first by `transform-ar-filter-and-name-petroleum.dwl`).
+
+**Field differences from `LaborAR.csv`** — `MercAR.csv` has `pymt_amt` where `LaborAR.csv` has `pymt_code_amt`, and has no `pymt_code`/`refund_code`/`refund_code_amt`/`misc_code`/`misc_code_amt`/`misc_desc`/`appnumb`/`batchid`/`remarks` at all (see the confirmed `MercAR.csv` field list earlier in this section). Otherwise the fields `AddInvoices` needs (`pymt_type`, `check_date`/`check_no`, `cash_pymt_date`/`cash_recpt_no`, `mo_ord_date`/`mo_ord_no`, `deposit_date`) all exist on `MercAR.csv` unchanged.
+
+- **`transform-invoice.dwl` — reused as-is, no Petroleum variant needed.** It only reads `vars.accountId`/`vars.blaId`/`vars.row.pymt_type`/the three payment-method date fields/`vars.row.deposit_date` — none of these differ between `LaborAR.csv` and `MercAR.csv`, and it never references `jobno`.
+- **`transform-invoiceline-petroleum.dwl`** (new file) — same as `transform-invoiceline.dwl` except `UnitPrice__c` reads `vars.row.pymt_amt` instead of `vars.row.pymt_code_amt`.
+- **`transform-payment-petroleum.dwl`** (new file) — same as `transform-payment.dwl` except `Amount__c` reads `vars.row.pymt_amt` instead of `vars.row.pymt_code_amt`; `PaymentDate__c`/`ReceiptDate__c`/`Payment_Method__c`/`ReferenceNumber__c` logic unchanged.
+- **`transform-ar-lookup-petroleum.dwl`** (new file) — `(vars.blaLicenseLog filter (r) -> r.licenseno == vars.row.licenseno)[0] default {}`, licenseno equivalent of `transform-ar-lookup.dwl`'s jobno filter.
+
+Flow Structure (mirrors section 3's `AddInvoices`, licenseno instead of jobno throughout):
+```
+For Each (Collection: #[vars.mercArRows]):
+      → Set Variable: row = #[payload]
+      → Transform Message (transform-ar-lookup-petroleum.dwl — finds {licenseno, blaId, accountId}
+        from vars.blaLicenseLog by licenseno; {} if no match)
+      → Set Variable: blaAccountLookup = payload
+      → Set Variable: blaId = vars.blaAccountLookup.blaId
+      → Set Variable: accountId = vars.blaAccountLookup.accountId
+      → Choice
+          When #[vars.blaId != null and vars.accountId != null]:
+              → Transform Message (transform-invoice.dwl — reused unchanged) → Salesforce Create
+                Invoice__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+                object: "Invoice__c", jobno slot = vars.row.licenseno; sets invoiceId]
+              → Choice
+                  When #[vars.invoiceId != null]:
+                      → Transform Message (transform-invoiceline-petroleum.dwl) → Salesforce Create
+                        InvoiceLine__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+                        object: "InvoiceLine__c"]
+                      → Transform Message (transform-payment-petroleum.dwl) → Salesforce Create
+                        Payment__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+                        object: "Payment__c"]
+                  Otherwise: (skip — Invoice failed, InvoiceLine/Payment not attempted)
+          Otherwise: (skip — no matching BLA/Account for this licenseno; log explicitly, same
+            NO_BLA_MATCH pattern as section 3, jobno slot = vars.row.licenseno)
+```
 
 **Do not carry over `AddSentInvoice`** (section 4) — that's a one-time Jewelry cutover requirement (old-system invoices with no AR payment record), not a general pattern. Strip it, its Flow Reference call, the `blaJobnoLog`-filter-to-Current step, and `transform-sent-invoice.dwl`/`transform-sent-invoiceline.dwl` out of the copied flow.
 
@@ -927,6 +971,7 @@ Everything not listed here (`transform-address.dwl`, `transform-location-results
 - **`transform-vehicles-combine.dwl`** — joins the `01`/`02` truck file pairs on `licenseno` into one row per license; reused once for the Current pair and once for the Historical pair (see Vehicles Flow Structure above).
 - **`transform-vehicles-petroleum.dwl`** — builds the `PET_Delivery_Vehicles` JSON string (see shape above) from `vars.truckRows` filtered to the current `vars.row.licenseno`. Output of a dedicated Transform Message step, stored as `vars.deliveryVehiclesJson`, ahead of the AQR transform — same "compute once, stash in a var" shape as `vars.aqvMap`/`vars.mercArRows`.
 - **`transform-assessment-question-response-petroleum.dwl`** — Petroleum's version of `transform-assessment-question-response.dwl`, 6-question list instead of Jewelry's 7, with real values instead of all-null (see AQR mapping above). Date fields assume `M/d/yyyy` format, same unconfirmed assumption as `transform-bla-petroleum.dwl`'s `deposit_date`.
+- **`transform-ar-lookup-petroleum.dwl`**, **`transform-invoiceline-petroleum.dwl`**, **`transform-payment-petroleum.dwl`** — `AddInvoicesPetroleum`'s licenseno-keyed equivalents of `transform-ar-lookup.dwl`/`transform-invoiceline.dwl`/`transform-payment.dwl` (see AddInvoicesPetroleum sub-flow above); `transform-invoice.dwl` itself is reused unchanged.
 
 ### Open items
 - `Trade__c` value for Petroleum — logged as dev question #9.
@@ -934,7 +979,7 @@ Everything not listed here (`transform-address.dwl`, `transform-location-results
 - `ApplicationType` (New/Renewal) — no jobno to derive it from, logged as dev question #11.
 - Whether `MercStd`/`MercAR`'s date columns (`deposit_date`, `ins_expire_date`, `date_issued`) match Jewelry's `LaborAR.csv` format (`M/d/yyyy`, non-padded — see section 3's Date Format note) needs confirming once real data is available; `transform-bla-petroleum.dwl` and `transform-assessment-question-response-petroleum.dwl` currently assume they do. **Update**: `MercAR.deposit_date`, `MercStd.date_issued`, and `MercStd.ins_expire_date` confirmed to hit the same `0:00:00` Access export issue as Jewelry (see date columns note above) — all three fixed by retyping the Access column to Short Text; `MercAR`'s `check_date`/`mo_ord_date`/`cash_pymt_date` still need individual confirmation.
 - **Needs verification in Studio**: confirm the CSV reader picks up headers correctly for all 4 truck files (`header: true`) and that `licenseno` comes through as the same type/format across `TrucksReg01`/`02`/`TrucksHis01`/`02` and `MercStd`/`MercAR` for the join/filter to match reliably.
-- No jobno anywhere in Petroleum means Jewelry's `AddInvoices`/`blaJobnoLog` join needs a licenseno-keyed equivalent (`blaLicenseLog`?) — not yet designed, see no-jobno note above.
+- ~~No jobno anywhere in Petroleum means Jewelry's `AddInvoices`/`blaJobnoLog` join needs a licenseno-keyed equivalent~~ — done. Built and confirmed working in Studio as `AddInvoicesPetroleum` (see sub-flow above, `blaLicenseLog`-keyed).
 - Contact `Phone` format (`area_code-telephone`) is an unconfirmed assumption — no existing convention elsewhere in the codebase to match (Jewelry's Contact never sets Phone).
 - `vars.licenseTypeId` — dev question #1 still open; a stopgap Query + Set Variable was added in Studio before the BLA transform (both Jewelry and Petroleum) to unblock testing in the meantime.
 - **TODO**: merge Historical into Current for `MercStd`/`MercAR` (i.e. `MercStdHis` → `MercStd`, `MercARHis` → `MercAR`), with `SourceFileType` set appropriately per row — the Access-side step that produces the final `SourceFileType`-tagged `MercStd.csv`/`MercAR.csv` Mule actually reads (see SourceFileType note above) hasn't been done yet.
