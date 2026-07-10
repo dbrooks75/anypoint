@@ -27,7 +27,7 @@ questions map (q) -> do {
         CurrencyValue: null,
         DateValue: q.dateValue,
         IntegerResponseValue: null,
-        ChoiceValue: q.choiceValue,
+        ChoiceValue: if (q.choiceValue != null) q.choiceValue as String else null,
         ResponseText: q.responseText
     }
 }

@@ -1,5 +1,5 @@
 %dw 2.0
-output application/json
+output application/java
 
 // vars.truckRows: one row per licenseno, TrucksReg01/02 (or TrucksHis01/02) already joined —
 // see flow-designs.md section 6 Vehicles note for the open question on how that join happens.
@@ -43,7 +43,7 @@ var columns = [
     { "type": "boolean", fieldName: "inService", label: "Out of Service" }
 ]
 ---
-{
+write({
     rows: trucks,
     columns: columns
-}
+}, "application/json")
