@@ -987,17 +987,17 @@ Everything not listed here (`transform-address.dwl`, `transform-location-results
 
 ---
 
-## 7. Next Work Unit: BiWeekly (Planned)
+## 7. Next Work Unit: BiWeeklyPayroll (Planned)
 
-Same target objects as Jewelry: Account, Location/Address, Contact, BLA, Business License, Assessment/AQR, Invoice__c/InvoiceLine__c, Payment__c, Account_Status__c. Source data is **a single input file**, confirmed **one row per job** (not one row per invoice/deposit like `LaborAR.csv`).
+**Correction**: this section previously assumed BiWeekly would load Invoice__c/InvoiceLine__c/Payment__c like Jewelry/Petroleum, with a single-file simplification to the join logic. **Confirmed otherwise**: BiWeeklyPayroll does **not** load Invoice__c, InvoiceLine__c, or Payment__c at all — those three objects are simply out of scope for this work unit, not simplified. Everything below in this section needs to be redone with that in mind; the "single file, one row per job" simplification reasoning may still be relevant for whatever objects *are* in scope, but the Invoice/Payment-specific parts of the old write-up no longer apply.
 
-**Key simplification vs. Jewelry**: Jewelry needs two files joined by jobno (`LaborStd.csv` for Account/Location/BLA, `LaborAR.csv` for Invoice__c/Payment__c) because a job can have multiple AR rows (e.g. several same-day deposits), so Invoice/Payment had to loop over the AR file separately from the account-level `For Each`, joined via `blaJobnoLog`. Since BiWeekly is one row per job, there's no join needed — Account/Location/BLA/Business License/Assessment/AQR/Invoice__c/InvoiceLine__c/Payment__c/Account_Status__c can all be created directly inside a single per-row `For Each`, no `blaJobnoLog`, no separate `AddInvoices` pass over a second file.
-
-Same simplification applies to Account_Status__c: Jewelry's `transform-account-status.dwl` finds the **oldest** `deposit_date` across potentially several matching `vars.arRows` for a jobno (see section 5). With one row per job, `Effective_Date__c` is just that row's own `deposit_date` directly — no `vars.arRows` pre-parse, no `filter`/`orderBy`.
+Target objects (most of the same set as Jewelry/Petroleum, minus Invoice__c/InvoiceLine__c/Payment__c): Account, Location/Address__c/PartyAddress__c, Contact, Business License Application, Business License, Assessment/Assessment Question Response, Account_Status__c. Source data is **a single input file** — column layout, one-row-per-job confirmation, and per-object field mapping all still need to be gathered fresh, same as Jewelry/Petroleum required at the start of each of those (see the "no jobno"/field-mismatch corrections logged throughout sections 2 and 6 as a reminder not to assume Jewelry's field names carry over without confirming).
 
 ### Open questions
-- Does BiWeekly need the Sent Invoice cutover logic (`AddSentInvoice`, section 4)? Default assumption is **no** — same reasoning as Petroleum (section 6): that's a one-time Jewelry-specific cutover, not carried forward unless told otherwise.
 - Actual source file layout / column names not yet known — needed before building the transforms.
+- Does Account_Status__c still apply the same way? If the file is one row per job (unconfirmed), `Effective_Date__c` may just be that row's own date directly, no `arRows`-style oldest-date lookup needed — same simplification Jewelry's AR-driven logic doesn't need when there's no separate AR file to join. Confirm once the file layout is known.
+- Does BiWeeklyPayroll need the Sent Invoice cutover logic (`AddSentInvoice`, section 4)? Almost certainly **no**, doubly so now that Invoice/Payment aren't loaded at all — that's a one-time Jewelry-specific cutover tied to Invoice creation, not carried forward unless told otherwise.
+- Does BiWeeklyPayroll need its own `InitAccountRecordType` sub-flow (query-based, like Petroleum) or will it hardcode `RecordTypeId` like Jewelry currently does? Default to the query-based approach given Jewelry's hardcoded version is flagged as a known problem (breaks on sandbox refresh).
 
 ---
 
