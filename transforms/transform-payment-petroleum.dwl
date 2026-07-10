@@ -23,7 +23,7 @@ var paymentDate =
 {
     BusinessLicenseApplication__c: vars.blaId,
     Invoice__c: vars.invoiceId,
-    Amount__c: if ((vars.row.pymt_amt default "") != "") vars.row.pymt_amt as Number else null,
+    Amount__c: if ((vars.row.tot_pymt_amt default "") != "") vars.row.tot_pymt_amt as Number else 0,
     PaymentDate__c: paymentDate,
     Payment_Method__c: paymentMethod,
     Payment_Status__c: "Completed",
