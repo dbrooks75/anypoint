@@ -826,7 +826,7 @@ Licenseno-keyed equivalent of Jewelry's `AddInvoices` (section 3) — same grain
 
 **Field differences from `LaborAR.csv`** — `MercAR.csv` has `pymt_amt` where `LaborAR.csv` has `pymt_code_amt`, and has no `pymt_code`/`refund_code`/`refund_code_amt`/`misc_code`/`misc_code_amt`/`misc_desc`/`appnumb`/`batchid`/`remarks` at all (see the confirmed `MercAR.csv` field list earlier in this section). Otherwise the fields `AddInvoices` needs (`pymt_type`, `check_date`/`check_no`, `cash_pymt_date`/`cash_recpt_no`, `mo_ord_date`/`mo_ord_no`, `deposit_date`) all exist on `MercAR.csv` unchanged.
 
-- **`transform-invoice.dwl` — reused as-is, no Petroleum variant needed.** It only reads `vars.accountId`/`vars.blaId`/`vars.row.pymt_type`/the three payment-method date fields/`vars.row.deposit_date` — none of these differ between `LaborAR.csv` and `MercAR.csv`, and it never references `jobno`.
+- **`transform-invoice-petroleum.dwl`** (new file) — **Correction**: initially reused `transform-invoice.dwl` as-is since no source fields differ, but Petroleum has its own business rule for `InvoiceDate__c`: use the `pymt_type`-driven date (`check_date`/`cash_pymt_date`/`mo_ord_date`) same as Jewelry, but if that date is blank, **fall back to `deposit_date`** instead of leaving it `null`. Jewelry's `transform-invoice.dwl` has no such fallback. `DueDate__c`/`InvoiceStatus__c` logic otherwise unchanged.
 - **`transform-invoiceline-petroleum.dwl`** (new file) — same as `transform-invoiceline.dwl` except `UnitPrice__c` reads `vars.row.pymt_amt` instead of `vars.row.pymt_code_amt`, and defaults to `0` (not `null`) when blank — deliberate Petroleum-specific choice, unlike Jewelry's `null`-on-blank.
 - **`transform-payment-petroleum.dwl`** (new file) — same as `transform-payment.dwl` except `Amount__c` reads `vars.row.tot_pymt_amt` instead of `vars.row.pymt_code_amt` — **not** `pymt_amt` (confirmed correction: `Payment__c.Amount__c` is the total payment amount, same field `transform-bla-petroleum.dwl`'s `AmountPaid` lookup already uses) — and, same as `UnitPrice__c` above, defaults to `0` (not `null`) when blank; `PaymentDate__c`/`ReceiptDate__c`/`Payment_Method__c`/`ReferenceNumber__c` logic unchanged.
 - **`transform-ar-lookup-petroleum.dwl`** (new file) — `(vars.blaLicenseLog filter (r) -> r.licenseno == vars.row.licenseno)[0] default {}`, licenseno equivalent of `transform-ar-lookup.dwl`'s jobno filter.
@@ -842,7 +842,8 @@ For Each (Collection: #[vars.mercArRows]):
       → Set Variable: accountId = vars.blaAccountLookup.accountId
       → Choice
           When #[vars.blaId != null and vars.accountId != null]:
-              → Transform Message (transform-invoice.dwl — reused unchanged) → Salesforce Create
+              → Transform Message (transform-invoice-petroleum.dwl — InvoiceDate__c falls back to
+                deposit_date if the pymt_type-driven date is blank, see below) → Salesforce Create
                 Invoice__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
                 object: "Invoice__c", jobno slot = vars.row.licenseno; sets invoiceId]
               → Choice
