@@ -23,7 +23,7 @@ var expirationDateTime =
 {
     AccountId: vars.accountId,
     Business_License_Application__c: vars.blaId,
-    Name: "CS-" ++ licenseno,
+    Name: "PET-" ++ licenseno,
     Issue_Date__c: issueDateTime,
     PeriodStart: issueDateTime,
     PeriodEnd: expirationDateTime,
