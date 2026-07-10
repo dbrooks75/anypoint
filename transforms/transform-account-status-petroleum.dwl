@@ -1,7 +1,7 @@
 %dw 2.0
 output application/java
 
-var matchingRows = vars.arRows filter (row) -> row.licenseno == vars.row.licenseno
+var matchingRows = vars.mercArRows filter (row) -> row.licenseno == vars.row.licenseno
 
 var oldestDepositDate = if (sizeOf(matchingRows) > 0)
     (matchingRows orderBy (row) -> row.deposit_date as Date {format: "M/d/yyyy"})[0].deposit_date

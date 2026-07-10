@@ -11,7 +11,7 @@ var issueDateTime =
 {
     AccountId: vars.accountId,
     AssessmentStatus: "Completed",
-    Name: "Business License Assessment",
+    Name: "Universal License Assessment",
     EffectiveDateTime: issueDateTime,
     Type: "LicensingAndPermitting",
     BusinessLicenseApplication__c: vars.blaId
