@@ -19,6 +19,10 @@ var paymentDate =
     if ((vars.row.deposit_date default "") != "")
         vars.row.deposit_date as Date {format: "M/d/yyyy"}
     else null
+
+// bank_no is a numeric Access column — same trailing-".00" export artifact as check_no/
+// cash_recpt_no/mo_ord_no, so strip it defensively the same way
+var bankNo = (vars.row.bank_no default "" splitBy ".")[0]
 ---
 {
     BusinessLicenseApplication__c: vars.blaId,
@@ -28,5 +32,6 @@ var paymentDate =
     Payment_Method__c: paymentMethod,
     Payment_Status__c: "Completed",
     ReceiptDate__c: paymentDate,
-    ReferenceNumber__c: referenceNumber
+    ReferenceNumber__c: referenceNumber,
+    Notes__c: "Bank_NO" ++ bankNo
 }
