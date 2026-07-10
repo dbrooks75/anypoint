@@ -6,5 +6,5 @@ output application/java
     Quantity__c: 1,
     LineType__c: "Base Fee",
     ProrateFactor__c: 100,
-    UnitPrice__c: if ((vars.row.pymt_amt default "") != "") vars.row.pymt_amt as Number else 0
+    UnitPrice__c: if ((vars.row.tot_pymt_amt default "") != "") vars.row.tot_pymt_amt as Number else 0
 }
