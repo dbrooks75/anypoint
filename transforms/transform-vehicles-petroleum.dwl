@@ -11,13 +11,13 @@ var truckRow = (vars.truckRows filter (row) -> (row.licenseno default "") == lic
 // equipment_no / tested_sealed (TrucksReg) / date_tested (TrucksHis) are not used in this JSON.
 // TrucksHis names the plate column differently (reg_plate_numbN, not reg_truck_numbN like
 // TrucksReg) — vars.truckRows mixes both sources, so fall back to the TrucksHis name.
-var trucks = (1 to 56) map (n) -> do {
+var trucks = ((1 to 56) map (n) -> do {
     var suffix = n as String
     var rawMake = truckRow[("truck_make" ++ suffix)]
     var rawYear = truckRow[("year" ++ suffix)]
     var rawPlate = (truckRow[("reg_truck_numb" ++ suffix)]) default (truckRow[("reg_plate_numb" ++ suffix)])
     ---
-    if (rawMake != null or rawYear != null or rawPlate != null)
+    if ((rawMake default "") != "" or (rawYear default "") != "" or (rawPlate default "") != "")
         {
             inService: true,
             vin: "",
@@ -30,17 +30,17 @@ var trucks = (1 to 56) map (n) -> do {
             make: rawMake default ""
         }
     else null
-} filter (t) -> t != null
+}) filter (t) -> t != null
 
 var columns = [
-    { type: "text", fieldName: "make", label: "Make" },
-    { type: "picklist", fieldName: "year", label: "Year" },
-    { type: "text", fieldName: "model", label: "Model" },
-    { type: "text", fieldName: "plateNumber", label: "Plate Number" },
-    { type: "picklist", fieldName: "state", label: "State" },
-    { type: "date", fieldName: "registrationExpiry", label: "Registration Exp. Date" },
-    { type: "text", fieldName: "vin", label: "Vehicle Number" },
-    { type: "boolean", fieldName: "inService", label: "Out of Service" }
+    { "type": "text", fieldName: "make", label: "Make" },
+    { "type": "picklist", fieldName: "year", label: "Year" },
+    { "type": "text", fieldName: "model", label: "Model" },
+    { "type": "text", fieldName: "plateNumber", label: "Plate Number" },
+    { "type": "picklist", fieldName: "state", label: "State" },
+    { "type": "date", fieldName: "registrationExpiry", label: "Registration Exp. Date" },
+    { "type": "text", fieldName: "vin", label: "Vehicle Number" },
+    { "type": "boolean", fieldName: "inService", label: "Out of Service" }
 ]
 ---
 {

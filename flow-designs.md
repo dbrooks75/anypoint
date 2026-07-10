@@ -841,7 +841,7 @@ Repeating columns — one set of 5 per truck slot, column names suffixed `N` (**
 
 Slot numbering is continuous across the two files, not restarting: `N = 1-39` in `TrucksReg01`/`TrucksHis01`, `N = 40-56` in `TrucksReg02`/`TrucksHis02` — so up to **56 truck slots per license**, split 39/17 across the two files. A license with fewer than 56 actual trucks leaves the remaining slot columns blank — the transform needs to filter those out, not create 56 empty vehicle entries per license.
 
-A truck slot `N` is considered populated (included in the output) if any of `truck_makeN`, `yearN`, or the plate column (`reg_truck_numbN`/`reg_plate_numbN` depending on source) is non-null — `equipment_no` and the tested/sealed column are **not used** anywhere in the Petroleum load and can be ignored.
+A truck slot `N` is considered populated (included in the output) if any of `truck_makeN`, `yearN`, or the plate column (`reg_truck_numbN`/`reg_plate_numbN` depending on source) is non-blank — `equipment_no` and the tested/sealed column are **not used** anywhere in the Petroleum load and can be ignored. **Correction**: blank slot cells come through from the CSV reader as empty string `""`, not `null` (the column header exists across all 56 slots even when a license has fewer trucks) — `transform-vehicles-petroleum.dwl`'s populated check must test `(value default "") != ""`, not `value != null`; the latter let all 56 slots through as "populated" in testing.
 
 **Source files**: `TrucksReg01.csv`, `TrucksReg02.csv`, `TrucksHis01.csv`, `TrucksHis02.csv` — headered CSVs (already-named columns, header: true), sitting in `C:\data\` alongside `MercStd.csv`/`MercAR.csv`. No positional renaming transform needed, unlike raw `laborstd.txt`/`his_lab.txt`.
 
