@@ -991,11 +991,470 @@ Everything not listed here (`transform-address.dwl`, `transform-location-results
 
 **Correction**: this section previously assumed BiWeekly would load Invoice__c/InvoiceLine__c/Payment__c like Jewelry/Petroleum, with a single-file simplification to the join logic. **Confirmed otherwise**: BiWeeklyPayroll does **not** load Invoice__c, InvoiceLine__c, or Payment__c at all — those three objects are simply out of scope for this work unit, not simplified. Everything below in this section needs to be redone with that in mind; the "single file, one row per job" simplification reasoning may still be relevant for whatever objects *are* in scope, but the Invoice/Payment-specific parts of the old write-up no longer apply.
 
-Target objects (most of the same set as Jewelry/Petroleum, minus Invoice__c/InvoiceLine__c/Payment__c): Account, Location/Address__c/PartyAddress__c, Contact, Business License Application, Business License, Assessment/Assessment Question Response, Account_Status__c. Source data is **a single input file** — column layout, one-row-per-job confirmation, and per-object field mapping all still need to be gathered fresh, same as Jewelry/Petroleum required at the start of each of those (see the "no jobno"/field-mismatch corrections logged throughout sections 2 and 6 as a reminder not to assume Jewelry's field names carry over without confirming).
+Target objects (most of the same set as Jewelry/Petroleum, minus Invoice__c/InvoiceLine__c/Payment__c): Account, Location/Address__c/PartyAddress__c, Contact, Business License Application, Business License, Assessment/Assessment Question Response, Account_Status__c. Source data is **a single input file**.
+
+### Source file — `BiWeeklyPayroll.csv` (confirmed 2026-07-10)
+Single file, one row per license application, keyed by `RID` (int) — confirms the one-row-per-job grain, so `Account_Status__c`/BLA dates can read straight off the row with no `arRows`-style join.
+
+Full column list:
+`RID, CompanyName, CompanyAddr, CompanyCity, CompanyState, CompanyZip, CompanyTel, Email, CompanyContact, CompanyContactTitle, CorpOfficeAddr, CorpOfficeCity, CorpOfficeState, CorpOfficeZip, CorpOfficeTel, CompanyNameSecState, RIagentName, RIagentAddr, RIagentCity, RIagentState, RIagentZip, RIagentTel, CompanyFEIN, MethodPaid, PayDay, ClassificationInvolved, SalaryRangeInvolved, WageHrViol, TypAppl, DateRecd, DateApproved, DateDenied, DateExpired, DateRevoked, ReviewedBy, Proof200Missing, ProofHighestBiWeeklyMissing, ConsentColBargMissing, MethodPaidMissing, PayDayMissing, ClassificationMissing, SalaryRangeMissing, CertNoWageHrViolMissing, OtherMissing, OrigSigChk, SuretyBondChk, PayrollRecChk, ConsentColBargChk, PayrollRec200Chk, MethodPaidChk, PayDayChk, ClassificationChk, SalaryRangeChk, CertNoWageHrViolChk, DateRenewed, DateRecd_validation, DateApproved_validation, DateDenied_validation, DateExpired_validation, DateRevoked_validation, DateRenewed_validation, CompanyZip_validation, CorpOfficeZip_validation, RIagentZip_validation, Email_validation, missing_percentages_%`
+
+**Working hypothesis on the checklist columns** (unconfirmed — needs user sign-off before transforms are written): the `*Missing`/`*Chk` columns appear to pair up into a review checklist, one pair per required-document/data item:
+- `MethodPaid`/`MethodPaidMissing`/`MethodPaidChk`, `PayDay`/`PayDayMissing`/`PayDayChk`, `ClassificationInvolved`/`ClassificationMissing`/`ClassificationChk`, `SalaryRangeInvolved`/`SalaryRangeMissing`/`SalaryRangeChk` — a raw value plus "is it missing" plus "was it checked by reviewer" for each.
+- `WageHrViol`/`CertNoWageHrViolMissing`/`CertNoWageHrViolChk` — same pattern, but the value field's name doesn't match the Missing/Chk suffix (`WageHrViol` vs `CertNoWageHrViol...`), so this pairing is a guess, not confirmed.
+- `Proof200Missing`/`PayrollRec200Chk`, `ProofHighestBiWeeklyMissing`/`PayrollRecChk` — possible pairings, also unconfirmed (names don't match as cleanly).
+- `ConsentColBargMissing`/`ConsentColBargChk`, `OrigSigChk`, `SuretyBondChk`, `OtherMissing` — checklist-only items with no separate value field.
+- If confirmed, this checklist likely maps to Assessment Question Response the same way Petroleum's 6-question list did — but the exact question wording/count is not yet known.
+
+**Other new columns**: `DateRenewed` — a sixth status-shaped date, needs to be added to the Account_Status__c precedence question. **Confirmed (2026-07-12): `*_validation` columns (`DateRecd_validation` … `Email_validation`) and `missing_percentages_%` are QA-only** — Access-side data-quality metadata, not read by any transform, not loaded to Salesforce.
+
+Notable shape differences from Jewelry/Petroleum, not yet mapped to Salesforce objects/fields — **do not guess**, confirm with the user before writing transforms:
+- Two addresses per row (`Company*` and `CorpOffice*`) plus a third contact-like block (`RIagentName/Addr/City/State/Zip/Tel` — registered agent) — unclear how many PartyAddress__c/Contact records this produces, unlike Jewelry's up-to-4 respparty pattern or Petroleum's single structured contact.
+- `CompanyNameSecState` — likely a Secretary-of-State-registered name distinct from `CompanyName`, meaning unclear.
+- `TypAppl` — unlike Petroleum (which had no application-type field at all, hardcoded "TBD"), BiWeeklyPayroll appears to have a real application-type field. Actual values not yet known.
+- Five status-shaped dates (`DateRecd, DateApproved, DateDenied, DateExpired, DateRevoked`) plus `ReviewedBy` — this is a materially different BLA/Account_Status__c status model than Jewelry/Petroleum (which only had an issue date), likely driving Approved/Denied/Revoked/Expired states. Precedence/logic between these fields not yet known.
+- `MethodPaid, PayDay, ClassificationInvolved, SalaryRangeInvolved, WageHrViol` — unclear whether these are Assessment Question Response answers (like Petroleum's 6-question AQR list) or unused/reference-only fields.
+- `Proof200Missing, ProofHighestBiWeeklyMissing` — look like boolean AQR-style questions, but the actual AQR question names/wording they map to aren't known yet.
+- `CompanyFEIN` maps cleanly to Account FEIN (Jewelry/Petroleum precedent).
+
+### Account creation rules (confirmed 2026-07-12)
+- One Account per source row (`RID`), same as Jewelry/Petroleum's one-per-grain-key pattern.
+- **Hardcoded skip**: `RID` 550 and 551 are excluded if present — no Account (or anything else) created for those rows.
+- **`DateRecd` null/empty → skip the whole record**, not just Account — log a note but do not import. (Unlike Jewelry/Petroleum, where every row got created regardless of date fields.) **Only the Account-creation skip gets logged** — downstream objects (Contacts, Addresses, BLA, etc.) aren't separately logged as skipped, they just never get created since there's no Account to attach to (same cascade-by-omission pattern as any other row that fails earlier in the `For Each`).
+- **`CompanyFEIN` null/empty → still import**, but log a note. FEIN is not a gate, unlike `DateRecd`.
+- No other conditional logic on Account creation beyond these three rules.
+
+**Correction (2026-07-12)**: the "invalid `Email` → empty string" rule given alongside the above actually belongs to **Contact**, not Account — Account has no Email field in this mapping. Applies once Contact's field mapping is designed.
+
+**Skip/note logging (confirmed 2026-07-12)**: `DateRecd`-null skips and `CompanyFEIN`-null notes don't fit the existing Result & Log Pattern (section 2), which only fires after a Salesforce Create — instead they're appended to the same `vars.logEntries` array at the filter step, before the `For Each` even starts, so everything still lands in one `import_log.csv`:
+- Skip: `{RID: row.RID, object: "Account", status: "Skipped", salesforce_id: null, error_code: null, error_message: "DateRecd missing - record not imported"}`
+- Note: `{RID: row.RID, object: "Account", status: "Note", salesforce_id: null, error_code: null, error_message: "CompanyFEIN missing"}` — appended in addition to (not instead of) the normal Success/Failed entry `AddAccount` logs after the real Create call.
+
+Built `transform-filter-and-name-biweeklypayroll.dwl` (new file) implementing the `RID` 550/551 hard skip, the `DateRecd`-null skip+log, and the `CompanyFEIN`-null note — same shape as Petroleum's `transform-filter-and-name-petroleum.dwl` but returns `{rows: [...], logEntries: [...]}` instead of a bare row array, since this is the first work unit that needs to produce log entries before the main `For Each` starts. `RID` is normalized the same way `jobno`/`licenseno` were (strip a trailing `.0` Access-export artifact via `splitBy "."`) before comparing against `"550"`/`"551"` or using it as the row's key.
+
+### Account field mapping (confirmed 2026-07-12)
+RecordType: Business Account, populated via a query-based `InitAccountRecordTypeBiWeeklyPayroll` sub-flow (same approach as Petroleum, **not** Jewelry's hardcoded `RecordTypeId`):
+```
+Salesforce Query: SELECT Id FROM RecordType WHERE SobjectType = 'Account' AND DeveloperName = 'Business_Account'
+Set Variable: accountRecordTypeId = #[payload[0].Id]
+```
+Run once at flow start, same as Petroleum's `InitAccountRecordTypePetroleum` (section 6).
+
+| Salesforce field | Source | Notes |
+|---|---|---|
+| `RecordTypeId` | `vars.accountRecordTypeId` | From `InitAccountRecordTypeBiWeeklyPayroll`, see above |
+| `Name` | `CompanyName` | |
+| `Federal_Tax_ID__c` | `CompanyFEIN` | Reuses Jewelry's `fixFein` cleanup (strips dashes, reformats 9-digit to `XX-XXXXXXX`) |
+| `DBA_Name__c` | — | Hardcoded `""` (literal empty string) — unlike Jewelry (`company`) and Petroleum (`respparty`), BiWeeklyPayroll has no separate DBA-like field |
+| `Business_Entity_Type__c` | — | Hardcoded `"Customer"` — not a lookup like Jewelry's `businessEntityTypes` map (`bustype` → Sole Proprietorship/Corporation/etc.); BiWeeklyPayroll has no equivalent source field |
+| `BillingStreet` | `CompanyAddr` | Single field, no add1/add2 concat needed (no separate address-line-2 column in this file) |
+| `BillingCity` | `CompanyCity` | |
+| `BillingState` | `CompanyState` | Same `stateNames` 2-letter→full-name lookup table as Jewelry/Petroleum (`transform2-account.dwl`/`transform-account-petroleum.dwl`), fallback to raw value if not found |
+| `BillingPostalCode` | `CompanyZip` | |
+
+Built `transform-account-biweeklypayroll.dwl` (new file) implementing this — `fixFein` and `stateNames` duplicated in-file, same pattern as Petroleum's copy in `transform-account-petroleum.dwl`.
+
+Not yet covered here: `RIagent*` block (still open — likely a Contact, not confirmed).
+
+### Location / Address__c field mapping (confirmed 2026-07-12/13)
+Unlike Jewelry/Petroleum's Mailing/Physical PO-Box-driven split, BiWeeklyPayroll always creates **exactly two** Location/Address__c pairs per row, sourced from two different address blocks:
+
+**Location 1 — "Company"** (from `Company*`):
+| Field | Value |
+|---|---|
+| `LocationType` | `"Business Site"` |
+| `Name` | `"Company"` |
+| `Description` | `"Bi-Weekly address for RID " ++ RID` |
+
+**Address 1** (`ParentId` = Location 1's Id):
+| Field | Value |
+|---|---|
+| `LocationType` | `"Business Site"` |
+| `ParentId` | `locationId` |
+| `Street` | `CompanyAddr` |
+| `City` | `CompanyCity` |
+| `StateCode` | `CompanyState` |
+| `PostalCode` | `CompanyZip` |
+| `Country` | `"United States"` (matches Jewelry/Petroleum's `Country`/`"United States"` pattern — **not** a `CountryCode`/`"US"` field, corrected 2026-07-13) |
+
+**Location 2 — "Corporate"** (from `CorpOffice*`, corrected 2026-07-13 — user's first pass said `Name = "Company"` for this one too, confirmed should be `"Corporate"`):
+| Field | Value |
+|---|---|
+| `LocationType` | `"Business Site"` |
+| `Name` | `"Corporate"` |
+| `Description` | `"Bi-Weekly corporate address for RID " ++ RID` |
+
+**Address 2** (`ParentId` = Location 2's Id):
+| Field | Value |
+|---|---|
+| `LocationType` | `"Business Site"` |
+| `ParentId` | `locationId` |
+| `Street` | `CorpOfficeAddr` |
+| `City` | `CorpOfficeCity` |
+| `StateCode` | `CorpOfficeState` |
+| `PostalCode` | `CorpOfficeZip` |
+| `Country` | `"United States"` |
+
+**`AddressType`/`Address_Type__c` confirmed (2026-07-13)**: both Locations get `"Physical"` for now — user's words: "that may change later," so treat as a placeholder, not a final business rule. This means `AddressType` is no longer what distinguishes "Company" from "Corporate" the way `"Mailing"`/`"Physical"` did in Jewelry/Petroleum — that distinction is now carried by `Location.Name`/`vars.locationName` instead ("Company" vs "Corporate"), used purely to pick which source columns (`Company*` vs `CorpOffice*`) feed the Address.
+
+Built three new transforms:
+- `transform-location-biweeklypayroll.dwl` — always returns both Locations (no PO-Box-driven conditional like Jewelry/Petroleum), `Description` uses `RID` instead of `jobno`/`licenseno`.
+- `transform-location-results-biweeklypayroll.dwl` — BiWeeklyPayroll equivalent of `transform-location-results.dwl`; returns `locationName` (`Location.Name`, "Company"/"Corporate") instead of `addressType`, since the picklist value no longer varies. In Studio, the inner `For Each` sets `vars.locationName` from this and separately sets `vars.addressType = "Physical"` as a hardcoded constant (not derived).
+- `transform-address-biweeklypayroll.dwl` — branches `Street`/`City`/`StateCode`/`PostalCode` on `vars.locationName == "Company"` (→ `Company*` columns) vs. else (→ `CorpOffice*` columns); `AddressType` is `vars.addressType` (the hardcoded `"Physical"`); `Country: "United States"` (confirmed, not `CountryCode`).
+
+**`transform-partyaddress-biweeklypayroll.dwl` confirmed (2026-07-13) and built**: `Effective_From__c` derives from `DateRecd` (`M/d/yyyy` format, confirmed correct). `Is_Primary__c` is `vars.locationName == "Company"` (Company is primary, Corporate is not). `PartyId`/`AddressId__c`/`Address_Type__c` unchanged from the existing pattern.
+
+**Confirmed (2026-07-13): `DateRecd` hit the same Access `0:00:00` export artifact as `MercAR`/`MercStd`'s date columns** (section 6) — fixed the same way, retyping the Access column to Short Text.
+
+**Update (2026-07-14): `DateApproved`, `DateDenied`, `DateExpired`, `DateRevoked`, and `DateRenewed` all retyped to Short Text in Access**, same fix, ahead of testing BLA/BusinessLicense. All six status-shaped date columns (`DateRecd` included) are now confirmed clean of the `0:00:00` export artifact.
+
+### Location/Address/PartyAddress Flow Structure (nested inside `AddLocationsAndAddressesBiWeeklyPayroll`, same shape as Jewelry/Petroleum section 2/6)
+```
+Flow Reference: AddLocationsAndAddressesBiWeeklyPayroll
+  → Transform Message (transform-location-biweeklypayroll.dwl — always 2 items, "Company"/"Corporate")
+  → Set Variable: locationList = payload
+  → Salesforce Create Location(s): Records = vars.locationList
+  → Transform Message (transform-location-results-biweeklypayroll.dwl)
+  → Set Variable: locationResults = payload
+  → For Each location result: (Collection: #[vars.locationResults])
+      → Set Variable: locationId = #[payload.locationId]
+      → Set Variable: locationName = #[payload.locationName]
+      → Set Variable: addressType = "Physical"   (hardcoded constant, not derived — see AddressType note above)
+      → Choice
+          When #[payload.success]:
+              → Transform Message (transform-address-biweeklypayroll.dwl)
+              → Salesforce Create Address__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "Address__c"]
+              → Choice
+                  When #[vars.addressId != null]:
+                      → Transform Message (transform-partyaddress-biweeklypayroll.dwl)
+                      → Salesforce Create PartyAddress__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "PartyAddress__c"]
+                  Otherwise: (skip — Address__c failed)
+          Otherwise: (skip — Location failed, log already captured by Location's own Result & Log entry)
+```
+
+### Contact field mapping (confirmed 2026-07-13/14)
+Two independent Contacts per row (not gated on each other), each skipped entirely if its driving field is blank — same "skip if blank" pattern as Petroleum's single optional contact:
+
+**Company contact** (skipped if `CompanyContact` is blank):
+| Field | Source | Notes |
+|---|---|---|
+| `FirstName`/`MiddleName`/`LastName` | `CompanyContact` | Split via `parseName` — reuses Jewelry's `transform-contact.dwl` word-splitting logic (first word → `FirstName`, last word → `LastName`, everything between → `MiddleName`), minus the title-stripping half (Title comes from a real column here, not extracted from the name) |
+| `Email` | `Email` | Invalid-format-→-empty-string rule applies here (confirmed 2026-07-13 this belongs to Contact, not Account) — validated against `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`, blanked if it doesn't match |
+| `Title` | `CompanyContactTitle` | |
+| `AccountId` | `vars.accountId` | |
+| `Phone` | — | **Not set** for this contact — confirmed 2026-07-13, Phone only applies to the RI contact below |
+
+**RI contact** (skipped if `RIagentName` is blank):
+| Field | Source | Notes |
+|---|---|---|
+| `LastName` | `RIagentName` | **No parsing** — unlike the Company contact, `RIagentName` is often a company name rather than a person's name, so the whole value goes to `LastName` as-is, no `FirstName`/`MiddleName` split |
+| `Title` | — | Hardcoded `"RI Agent"` |
+| `AccountId` | `vars.accountId` | |
+| `Phone` | `RIagentTel` | Defaults to `"(999) 999-9999"` if blank |
+
+Built `transform-contact-biweeklypayroll.dwl` implementing both. `RIagentAddr/City/State/Zip` are **not used** — no address is created for the RI agent, only `RIagentName`/`RIagentTel` feed Salesforce.
+
+### Contact Flow Structure (`AddContactsBiWeeklyPayroll`, independent — no downstream gating, same as Jewelry/Petroleum's `AddContacts`)
+```
+Flow Reference: AddContactsBiWeeklyPayroll
+  → Transform Message (transform-contact-biweeklypayroll.dwl — 0-2 items)
+  → Salesforce Create Contact(s): Records = #[payload]   (no intermediate `contactList` variable needed —
+      unlike Location, nothing downstream needs to look back at the original records; matches Jewelry's
+      actual AddContacts pattern, which also skips this)
+  → Transform Message (extract results, List Result & Log Pattern) → Set Variable: contactResults = payload
+  → Set Variable: logEntries = (vars.logEntries default []) ++ (vars.contactResults map (r) -> {
+        RID: vars.row.RID, object: "Contact", status: if (r.success) "Success" else "Failed",
+        salesforce_id: r.id, error_code: r.errorCode, error_message: r.errorMessage
+    })
+```
+
+### BLA (Business License Application) — confirmed rules so far (2026-07-14)
+
+**`ApplicationType`** (from `TypAppl`):
+| `TypAppl` value | `ApplicationType` |
+|---|---|
+| `"Initial"` | `"New"` |
+| `"Re-application"` | `"Renewal"` |
+| anything else (including blank) | `"Initial"` |
+
+**`Status`** — unlike Jewelry/Petroleum's hardcoded `"Approved"`, BiWeeklyPayroll derives it from the five status dates:
+1. `"Submitted"` if `DateRecd` is non-null **and** `DateApproved`/`DateDenied`/`DateExpired`/`DateRevoked`/`DateRenewed` are **all** null.
+2. `"Denied"` if `DateRecd` is non-null, `DateApproved` is null, `DateExpired` is null, **and** `DateDenied` is non-null. (Rule as given doesn't reference `DateRevoked`/`DateRenewed` at all — implemented literally, not inferring additional conditions on those two.)
+3. Otherwise: `"Approved"`.
+
+**Also confirmed (2026-07-14)**: `AppliedDate` ← `DateRecd`. `AmountPaid` hardcoded `0` (same as Jewelry, no AR/payment file here). `Trade__c` is `null` for now (placeholder, unlike Petroleum's still-open "TBD" — this one's deliberately null, not pending an answer).
+
+**Also confirmed (2026-07-14)**: BLA `Description` = `"Legacy RID: " ++ RID`. `Legacy_License_Number__c` = `RID`. Business License `Name` = `"BW-" ++ RID` (BiWeeklyPayroll's prefix, alongside Jewelry's `"CS-"` and Petroleum's `"PET-"`).
+
+**Business License date/status logic confirmed (2026-07-14)** — no computed one-year expiration like Jewelry/Petroleum; reads directly off the real status dates instead:
+- `Issue_Date__c` = `PeriodStart` = the **later** of `DateApproved`/`DateRenewed` (null-safe: if only one is set, use it; if both null, result is null).
+- `PeriodEnd` = the **later** of `DateExpired`/`DateRevoked` (same null-safe logic).
+- `Expiration_Date__c` = hardcoded `null` — not derived at all for this unit.
+- `Status` (Active/Inactive equivalent) = `"Verified"` if `DateExpired` is null **or** today's date is before `DateExpired`; otherwise `"Inactive"`. Independent of BLA's own `Status` derivation — not reused.
+
+Built `transform-bla-biweeklypayroll.dwl` and `transform-business-license-biweeklypayroll.dwl` implementing all confirmed BLA/BusinessLicense rules. `transform-business-license-biweeklypayroll.dwl` introduces a null-safe `laterDate(a, b)` helper (parses both with `M/d/yyyy`, returns whichever is later, falls back to whichever one is non-null, or `null` if both are) — first use of this pattern on the project, since Jewelry/Petroleum never needed to compare two dates against each other.
+
+### BLA/BusinessLicense Flow Structure (nested inside `AddBusinessLicenseAppBiWeeklyPayroll`, same shape as Jewelry/Petroleum section 2/6)
+```
+Flow Reference: AddBusinessLicenseAppBiWeeklyPayroll
+  → Transform Message (transform-bla-biweeklypayroll.dwl)
+  → Salesforce Create Business License Application (AccountId = accountId, Records: #[[payload]])
+      → [Result & Log Pattern → logEntries, object: "BusinessLicenseApplication"; sets blaId]
+  → Choice
+      When #[vars.blaId != null]:
+          → Set Variable: blaRidLog = (vars.blaRidLog default []) ++ [{ RID: vars.row.RID,
+              blaId: vars.blaId, accountId: vars.accountId }]
+          → Transform Message (transform-business-license-biweeklypayroll.dwl)
+          → Salesforce Create Business License (Records: #[[payload]])
+              → [Result & Log Pattern → logEntries, object: "BusinessLicense"]
+      Otherwise: (skip — BLA failed, Business License/Assessment/AQR not attempted)
+```
+Note: unlike Jewelry/Petroleum, there's no `AddInvoices`-equivalent needing `blaRidLog` later (Invoice__c/Payment__c out of scope, see the correction at the top of this section) — but the log is still useful for the eventual Note object (details TBD) and general audit/debugging, so it's kept.
+
+**Naming note (2026-07-14)**: this variable is called `blaRidLog` (RID-keyed), deliberately distinct from Jewelry's `blaJobnoLog` and Petroleum's `blaLicenseLog` — same "keep each work unit's variable names distinct even when the shape is identical" preference already established between Jewelry and Petroleum.
+
+### Assessment Question Response — question list confirmed (2026-07-14), field mapping still open
+13 questions total (vs. Jewelry's 7, Petroleum's 6) — `InitAssessmentQuestionVersionBiWeeklyPayroll` will need `Name IN (...)` with this exact list, same pattern as `InitAssessmentQuestionVersion`/`InitAssessmentQuestionVersionPetroleum`:
+
+1. Does the company's average payroll exceed 200% of State minimum wage?
+2. Did the company have payroll during the entire last calendar year?
+3. Estimated Biweekly Wages
+4. Payment Method
+5. Payment Day
+6. Employee Class
+7. Salary Min
+8. Salary Max
+9. Bond Value
+10. Bond Expiration Date
+11. Has said company ever had a wage and hour violation?
+12. Are the involved employees subject to collective bargaining?
+13. Date Application Received
+
+**Per-question field mapping (confirmed so far, gathered one at a time, 2026-07-14)**:
+| # | Question | ResponseType | Value |
+|---|---|---|---|
+| 1 | Payroll exceeds 200% of min wage? | `Long Text Area` | `ResponseText: if ((PayrollRec200Chk default "") == "Yes") "Yes" else "No"` — confirms `PayrollRec200Chk` feeds this question (not `Proof200Missing`, which was the earlier unconfirmed guess). **Corrected 2026-07-14**: originally recorded as a literal boolean truthy check; confirmed all `*Chk`/Access "Yes/No"-type columns export as `"Yes"`/`"No"` text, so this needed the same explicit string comparison as Q11/Q12, not `if (PayrollRec200Chk)` |
+| 2 | Payroll entire last calendar year? | `Long Text Area` | `ResponseText: if ((PayrollRecChk default "") == "Yes") "Yes" else "No"` — confirms `PayrollRecChk` feeds this one, same correction as Q1 |
+| 3 | Estimated Biweekly Wages | `Integer` | `IntegerResponseValue: 0` — hardcoded placeholder, **not** sourced from any column |
+| 6 | Employee Class | `Text Area` | `ResponseText: null` — hardcoded placeholder, **not** sourced from `ClassificationInvolved` (that was an unconfirmed guess, now known wrong) |
+
+| 4 | Payment Method | `Text Area` | `ChoiceValue: normalizePaymentMethods(MethodPaid)` — source is `MethodPaid`, run through a ported VB helper (see below); note the field populated is `ChoiceValue`, not `ResponseText`, despite the `Text Area` response type — matches the existing pattern where `responseType` is documentation only, not something the transform branches on |
+
+| 5 | Payment Day | `Text Area` | `ResponseText: normalizeDayValue(PayDay)` — source is `PayDay`, run through a ported VB helper (see below) |
+
+| 7 | Salary Min | `Text Area` | `IntegerResponseValue: getBiweeklySalary(SalaryRangeInvolved, "min")` — see helper below |
+| 8 | Salary Max | `Text Area` | `IntegerResponseValue: getBiweeklySalary(SalaryRangeInvolved, "max")` — see helper below |
+
+| 9 | Bond Value | `Text Area` | `ResponseText: null` — hardcoded placeholder, matches Q6's pattern (same ResponseType → same field convention) |
+| 10 | Bond Expiration Date | `Text Area` | `ResponseText: null` — hardcoded placeholder, same as Q9 |
+| 11 | Wage and hour violation? | `Text Area` | `ResponseText: if ((WageHrViol default "") == "Yes") "Yes" else "No"` — `WageHrViol` can be null, treated as `"No"` |
+| 12 | Subject to collective bargaining? | `Text Area` | `ResponseText: if ((ConsentColBargChk default "") == "Yes") "Yes" else "No"` — `ConsentColBargChk` can be null; else-branch **inferred** as `"No"` to match every other Yes/No question's pattern (Q1, Q2, Q11) — user only stated the `"Yes"` condition this time, didn't explicitly restate the else, flag if wrong |
+| 13 | Date Application Received | `Text Area` | `DateValue: if ((DateRecd default "") != "") DateRecd as Date {format: "M/d/yyyy"} else null` — native Date field (confirmed, not a text field), same pattern as Jewelry/Petroleum's `DateValue` fields — no output-format string needed, Salesforce handles Date serialization |
+
+**All 13 questions now mapped.** Built `transform-assessment-question-response-biweeklypayroll.dwl` — bundles all four ported VB helpers (`normalizePaymentMethods`, `normalizeDayValue`, `safeVal`, `getBiweeklySalary`/`convertToBiweekly`) inline, same "duplicate shared helpers per work unit" pattern as `stateNames`/`fixFein` in the Account transforms.
+
+### InitAssessmentQuestionVersionBiWeeklyPayroll (sub-flow body)
+Same pattern as `InitAssessmentQuestionVersion`/`InitAssessmentQuestionVersionPetroleum` (section 2/6) — query all 13 question names, reduce to latest version per question:
+```
+Salesforce Query: SELECT Id, QuestionText, Name, VersionNumber FROM AssessmentQuestionVersion
+                   WHERE Name IN (
+                       'Does the company''s average payroll exceed 200% of State minimum wage?',
+                       'Did the company have payroll during the entire last calendar year?',
+                       'Estimated Biweekly Wages',
+                       'Payment Method',
+                       'Payment Day',
+                       'Employee Class',
+                       'Salary Min',
+                       'Salary Max',
+                       'Bond Value',
+                       'Bond Expiration Date',
+                       'Has said company ever had a wage and hour violation?',
+                       'Are the involved employees subject to collective bargaining?',
+                       'Date Application Received'
+                   ) AND Status = 'Active'
+                   ORDER BY Name ASC, VersionNumber ASC
+Transform Message (transform-aqv-lookup.dwl — reused as-is from Jewelry/Petroleum, no BiWeeklyPayroll
+  variant needed, it's a generic reduce-by-Name with no work-unit-specific logic)
+Set Variable: aqvMap = #[payload]
+```
+Note the escaped apostrophe (`''`) in "the company's" for the SOQL string literal — the only question name with a literal apostrophe.
+
+### Assessment field mapping (confirmed 2026-07-14) and Flow Structure
+| Field | Value |
+|---|---|
+| `AccountId` | `vars.accountId` |
+| `BusinessLicenseApplication__c` | `vars.blaId` |
+| `AssessmentStatus` | `"Completed"` |
+| `Name` | `"Universal License Assessment"` — same as Petroleum's (both differ from Jewelry's `"Business License Assessment"`) |
+| `EffectiveDateTime` | Later of `DateApproved`/`DateRenewed` (same null-safe `laterDate` helper as `transform-business-license-biweeklypayroll.dwl`, duplicated in this file), converted to a `DateTime` string (`yyyy-MM-dd'T'HH:mm:ssX`), matching Jewelry/Petroleum's `EffectiveDateTime` shape |
+| `ExpirationDate` | `DateExpired`, parsed to a native `Date` — **new field**, not populated by Jewelry/Petroleum's Assessment transforms at all |
+| `Type` | `"LicensingAndPermitting"` — same as Jewelry/Petroleum |
+
+Built `transform-assessment-biweeklypayroll.dwl` implementing this.
+
+```
+  → Transform Message (transform-assessment-biweeklypayroll.dwl)
+  → Salesforce Create Assessment (linked to blaId, Records: #[[payload]])
+      → [Result & Log Pattern → logEntries, object: "Assessment"; sets assessmentId]
+  → Transform Message (transform-assessment-question-response-biweeklypayroll.dwl — uses vars.assessmentId, vars.aqvMap; builds list of 13)
+  → Salesforce Create Assessment Question Response (Records: #[payload]) → [List Result & Log Pattern → logEntries, object: "AssessmentQuestionResponse"]
+```
+`InitAssessmentQuestionVersionBiWeeklyPayroll` needs to be added to the top-level Flow Structure (before the main `For Each`, alongside `InitAccountRecordTypeBiWeeklyPayroll`) — not yet wired into Studio, along with the rest of this Assessment/AQR chain. This is also where the earlier "checklist columns" hypothesis (`*Missing`/`*Chk` pairs) needs to be resolved, since several of these 13 questions plausibly correspond to those raw/missing/checked column triples — though several confirmed above turned out to be hardcoded placeholders rather than column-sourced, so that hypothesis may not hold for the rest either. Don't assume any question maps to a source column without explicit confirmation.
+
+**`getBiweeklySalary`/`convertToBiweekly` helpers (confirmed 2026-07-14, ported from a third client-provided VB script, `GetBiweeklySalary`/`ConvertToBiweekly`)** — parses a free-text salary range string (e.g. `"$15.00 - $18.50/hour"`, `"40000-45000 annual"`), detects pay period (hourly/biweekly/annual) from keywords, strips descriptor text, splits on `-` into min/max, and converts both ends to a biweekly-equivalent integer. Returns `0` on any validation failure (blank input, bad selector, non-positive parsed numbers) — matches the VB `SafeFail` label's behavior exactly, not an error/exception:
+```
+fun safeVal(s) = do {
+    var trimmed = trim(s default "")
+    var m = trimmed scan /^-?[0-9]+(?:\.[0-9]+)?/
+    ---
+    if (isEmpty(m)) 0 else (m[0][0] as Number)
+}
+
+fun convertToBiweekly(value, payType) =
+    if (payType == "hourly") value * 80
+    else if (payType == "biweekly") value
+    else if (payType == "annual") value / 26
+    else 0
+
+fun getBiweeklySalary(rangeStr, selector) = do {
+    var sel = lower(selector default "")
+    var raw = rangeStr default ""
+    ---
+    if (trim(raw) == "" or (sel != "min" and sel != "max")) 0
+    else do {
+        var c1 = lower(raw)
+        var c2 = c1 replace "$" with ""
+        var c3 = c2 replace "," with ""
+        var c4 = c3 replace "+" with ""
+        var c5 = c4 replace " to " with "-"
+        var c6 = c5 replace "to" with "-"
+
+        var detectedPayType =
+            if (c6 contains "hour") "hourly"
+            else if (c6 contains "week" or c6 contains "biweekly") "biweekly"
+            else if (c6 contains "year" or c6 contains "annual" or c6 contains "annually") "annual"
+            else ""
+
+        var d1 = c6 replace "per hour" with ""
+        var d2 = d1 replace "/hour" with ""
+        var d3 = d2 replace "hour" with ""
+        var d4 = d3 replace "per week" with ""
+        var d5 = d4 replace "/week" with ""
+        var d6 = d5 replace "week" with ""
+        var d7 = d6 replace "biweekly" with ""
+        var d8 = d7 replace "per year" with ""
+        var d9 = d8 replace "/year" with ""
+        var d10 = d9 replace "/ annually" with ""
+        var d11 = d10 replace "annually" with ""
+        var d12 = d11 replace "annual" with ""
+        var d13 = d12 replace "year" with ""
+        var cleaned = d13 replace " " with ""
+        ---
+        if (cleaned == "") 0
+        else do {
+            var parts = cleaned splitBy "-"
+            var minVal = safeVal(parts[0])
+            var maxVal = if (sizeOf(parts) > 1) safeVal(parts[1]) else minVal
+            ---
+            if (minVal <= 0 or maxVal <= 0) 0
+            else do {
+                var resolvedPayType =
+                    if (detectedPayType != "") detectedPayType
+                    else if (maxVal <= 300) "hourly"
+                    else if (maxVal <= 10000) "biweekly"
+                    else "annual"
+                var result = if (sel == "min") convertToBiweekly(minVal, resolvedPayType)
+                             else convertToBiweekly(maxVal, resolvedPayType)
+                ---
+                round(result)
+            }
+        }
+    }
+}
+```
+Notes/assumptions made porting this:
+- **`safeVal` confirmed 2026-07-14** against the real VB `SafeVal` (4th screenshot): `On Error Resume Next` + `Val(valStr)` after trimming trailing `"."`/`" "` characters — VB's `Val()` does a **leading-numeric-prefix parse** (reads from the start, stops at the first invalid character, returns `0` if nothing valid at the start), not a strict whole-string match. The regex-scan port above (`^-?[0-9]+(?:\.[0-9]+)?`) matches this correctly; the original guess (strict `^...$` full-match) was wrong and has been corrected. The VB trailing-`.`/`" "`-trim loop is effectively subsumed by the leading-prefix regex (a lone trailing `.` with no following digit is never included in the match either way), so it wasn't ported as a separate step.
+- VB's `CInt(...)` (rounds to nearest integer, banker's rounding on exact `.5`) ported as DataWeave's `round(...)` (rounds half away from zero) — behaviorally identical except on an exact `.5` tie, considered close enough not to block on.
+- The VB source's `"/ annually"` replace has a literal space after the slash (`"/ annually"`, not `"/annually"`) — transcribed verbatim, not a typo I introduced.
+- A companion `GetBusinessEntityType` VB function was also visible in the same screenshot (`I`→"Sole Proprietorship", `P`→"General Partnership", `C`→"Corporation For Profit") — confirms this is the same client helper library Jewelry's `businessEntityTypes` map in `transform2-account.dwl` was originally sourced from. Not relevant to BiWeeklyPayroll (its `Business_Entity_Type__c` is hardcoded `"Customer"`, already confirmed) — noted for context only, no action needed.
+
+**`normalizePaymentMethods` helper (confirmed 2026-07-14, ported from a client-provided VB script, `NormalizePaymentMethods` in a `Helpers` module)** — non-exclusive substring matching against `MethodPaid`, joined with `"; "` when multiple match, defaults to `"Other"` only when the input is non-blank but nothing matched (blank input stays blank, doesn't become `"Other"`):
+```
+fun normalizePaymentMethods(raw) = do {
+    var inputStr = raw default ""
+    var lowerStr = lower(inputStr)
+    ---
+    if (inputStr == "") ""
+    else do {
+        var parts = [
+            if (lowerStr contains "check") "Check" else null,
+            if (lowerStr contains "direct deposit") "Direct Deposit" else null,
+            if (lowerStr contains "pay card" or lowerStr contains "paycard") "Pay Card" else null,
+            if (lowerStr contains "other") "Other" else null
+        ] filter (p) -> p != null
+        ---
+        if (isEmpty(parts)) "Other" else (parts joinBy "; ")
+    }
+}
+```
+Note: the VB source checks `"pay card"` and `"pay cards"` as two separate conditions, but `"pay card"` is always a substring of `"pay cards"`, so the second check is redundant — collapsed to a single `"pay card"` check (plus `"paycard"`, the no-space variant) with no behavior change.
+
+**`normalizeDayValue` helper (confirmed 2026-07-14, ported from a second client-provided VB script, `NormalizeDayValue`)** — searches `PayDay` for any day-of-week name (singular or plural, e.g. "Friday"/"Fridays"), case-insensitive, returns the canonical capitalized day name of the **first** match in `Sunday..Saturday` order (matching the VB `For` loop's array order and early exit), or `""` if nothing matches:
+```
+fun normalizeDayValue(raw) = do {
+    var days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+    var normalizedInput = lower(trim(raw default ""))
+    var matches = days filter (day) -> (normalizedInput contains lower(day)) or (normalizedInput contains (lower(day) ++ "s"))
+    ---
+    if (isEmpty(matches)) "" else matches[0]
+}
+```
+
+### Note object (confirmed 2026-07-12 — new, not present in Jewelry/Petroleum)
+BiWeeklyPayroll loads a **Note** object instead of Invoice__c/InvoiceLine__c/Payment__c (which this unit doesn't touch at all, per the correction above). Field mapping/details not yet provided — user will supply after the rest of the flow (Account/Location/Address/Contact/BLA/BusinessLicense/Assessment/AQR) is designed.
+
+### Building in Studio (started 2026-07-12) — from scratch, like Petroleum
+Per lesson 7 in [[project_anypoint_salesforce_connectivity]], **do not** raw-copy `Petroleum.xml`/`Jewelry.xml` to start this flow — Studio treats copied flow files as linked. Build `BiWeeklyPayroll.xml` fresh in the Studio GUI instead.
+
+**Trigger File — `LoadReadyFlagBiWeeklyPayroll.csv`**: own sentinel file, same convention as Jewelry/Petroleum (section 2/6) — `Min Size: 1`, created only after `BiWeeklyPayroll.csv` is fully in place in `C:\data\`.
+
+**On New or Updated File Settings**: Directory `C:\data\`, File Name Pattern `LoadReadyFlagBiWeeklyPayroll.csv`, Min Size `1`, polling interval `10` seconds (same as Jewelry/Petroleum).
+
+**Flow Structure so far**:
+```
+On New or Updated File (C:\data\, LoadReadyFlagBiWeeklyPayroll.csv)
+  → File Read: C:\data\BiWeeklyPayroll.csv
+  → Transform Message (transform-filter-and-name-biweeklypayroll.dwl — CSV → Java, header: true;
+      returns {rows, logEntries})
+  → Set Variable: filterResult = #[payload]
+  → Set Variable: biWeeklyPayrollRows = #[vars.filterResult.rows]
+  → Set Variable: logEntries = #[vars.filterResult.logEntries]   (first write — no `default []` needed
+      here since this is the very first place logEntries is set, unlike every append after this)
+  → Flow Reference: InitAccountRecordTypeBiWeeklyPayroll (runs once — sets vars.accountRecordTypeId)
+  → For Each row: (Collection: #[vars.biWeeklyPayrollRows])
+      → Set Variable: row = #[payload]
+      → Flow Reference: AddAccount
+          → Transform Message (transform-account-biweeklypayroll.dwl)
+          → Salesforce Create Account (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+              object: "Account", keyed by vars.row.RID instead of jobno/licenseno]
+          → Set Variable: accountId = vars.accountResult.id
+```
+
+**`InitAccountRecordTypeBiWeeklyPayroll` sub-flow body** (same query as Petroleum's, see the Account field mapping section above):
+```
+Salesforce Query: SELECT Id FROM RecordType WHERE SobjectType = 'Account' AND DeveloperName = 'Business_Account'
+Set Variable: accountRecordTypeId = #[payload[0].Id]
+```
+
+**Confirmed working in Studio (2026-07-13)**: trigger → file read → filter transform → `InitAccountRecordTypeBiWeeklyPayroll` → `For Each` → `AddAccount` (Account create) tested successfully. `AddLocationsAndAddressesBiWeeklyPayroll` (Location → Address__c → PartyAddress__c) also confirmed working in Studio.
+
+**Confirmed working in Studio (2026-07-14)**: `AddContactsBiWeeklyPayroll` (Contact create, 0-2 per row) tested successfully. `AddBusinessLicenseAppBiWeeklyPayroll` (BLA → BusinessLicense) also confirmed working.
+
+**Not yet wired**: `InitAssessmentQuestionVersionBiWeeklyPayroll` (needed once the AQR question list is known), Account_Status__c nested inside `AddAccount` (deferred — its date-precedence logic isn't decided yet, see Open Questions), and Assessment/Assessment Question Response/Note (fully open, see below).
 
 ### Open questions
-- Actual source file layout / column names not yet known — needed before building the transforms.
-- Does Account_Status__c still apply the same way? If the file is one row per job (unconfirmed), `Effective_Date__c` may just be that row's own date directly, no `arRows`-style oldest-date lookup needed — same simplification Jewelry's AR-driven logic doesn't need when there's no separate AR file to join. Confirm once the file layout is known.
+- All the "not yet mapped" items above — need per-field Salesforce mapping decisions before transforms can be written.
+- Does Account_Status__c still apply the same way, and what's the precedence across `DateRecd/DateApproved/DateDenied/DateExpired/DateRevoked` for deriving status? Needs a real answer now that the file's grain is confirmed one-row-per-job.
 - Does BiWeeklyPayroll need the Sent Invoice cutover logic (`AddSentInvoice`, section 4)? Almost certainly **no**, doubly so now that Invoice/Payment aren't loaded at all — that's a one-time Jewelry-specific cutover tied to Invoice creation, not carried forward unless told otherwise.
 - Does BiWeeklyPayroll need its own `InitAccountRecordType` sub-flow (query-based, like Petroleum) or will it hardcode `RecordTypeId` like Jewelry currently does? Default to the query-based approach given Jewelry's hardcoded version is flagged as a known problem (breaks on sandbox refresh).
 
