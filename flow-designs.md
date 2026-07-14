@@ -428,6 +428,7 @@ The Invoice Load (below) references `vars.blaJobnoLog` directly and joins on job
 - **Go back and apply the Result & Log Pattern to the other subflows in Studio** — `AddInvoices` is getting it built-in now; `AddAccount`, `AddLocationsAndAddresses`, `AddContacts`, `AddBusinessLicenseApp` were built earlier and need to be revisited to confirm every Salesforce Create in them actually has the extract-result + `logEntries` append steps wired up, matching what's documented in Flow Structure above (design is correct in the doc — needs verifying against the actual Studio build).
 - Build the Invoice Load Flow (see below) using `vars.blaJobnoLog` (in-memory, same flow execution — see Trigger File section above)
 - **Interim reconciliation logging (current plan)**: write `import_log.csv` via the Result & Log Pattern (see above), then import into the Postgres `import_log` table using pgAdmin's **Import/Export Data** tool (right-click table → Import, point at the CSV, header: yes, map columns to jobno/object/status/salesforce_id/error_code/error_message, leave id/logged_at unmapped). This works entirely through pgAdmin's existing connection — no Mule Database connector or JDBC driver required, so it's unaffected by the Maven/PKIX blocker below.
+- **Build a `CleanupJewelry` sub-flow** (2026-07-14) — Petroleum and BiWeeklyPayroll both now have their own dedicated cleanup sub-flow (`CleanupPetroleum`/`CleanupBiWeeklyPayroll`: `import_log.csv` write, BLA-log audit write, processed-file archiving, called at the very end of the main flow). Jewelry still does this inline/not-at-all — retrofit it to match once the other two are confirmed working, so all three work units follow the same convention.
 - PostgreSQL reconciliation logging **directly from the Mule flow** — **blocked**: Maven can't resolve `org.postgresql:postgresql:42.7.3` (`PKIX path building failed` — the sandbox's TLS-intercepting proxy isn't trusted by Java's cacerts). Fix requires importing the corporate root CA into the JDK Studio bundles, which needs admin rights. Checking with IT. Revisit once unblocked — would replace the CSV/pgAdmin-import step above with direct Database Insert per log entry.
   - Add Database connector from Exchange to project
   - Add PostgreSQL JDBC driver to pom.xml (`org.postgresql:postgresql:42.7.3`)
@@ -812,7 +813,7 @@ For Each row: (Collection: #[vars.mercStdRows])
                   & Log Pattern → logEntries, object: "AssessmentQuestionResponse"]
             Otherwise: (skip — BLA failed, BL/Assessment/AQR not attempted)
 ```
-Not yet built: the `import_log.csv`/processed-file-archiving writes — see open items below. The `blaLicenseLog` audit write (below) is built.
+**Update (2026-07-14)**: `import_log.csv`/processed-file-archiving now built as a separate **`CleanupPetroleum`** sub-flow, called at the very end of the main flow (after the `For Each` and `AddInvoicesPetroleum` complete) — kept as its own named sub-flow rather than inline steps at the tail of the main flow body, for the same "one responsibility per sub-flow" reasoning as `AddAccount`/`AddContacts`/etc. Contains: File Write `import_log.csv` (`vars.logEntries as CSV`), then File Move `MercStd.csv`/`MercAR.csv`/all 4 truck files → `C:\data\processed\`, done last so a mid-flow error leaves source files in place for retry. **TODO**: Jewelry doesn't have this yet either — retrofit Jewelry with its own `CleanupJewelry` sub-flow (same pattern, `LaborStd.csv`/`LaborAR.csv`) at some point.
 
 Right after the main `For Each` completes (same position as Jewelry's `bla_jobno_map.csv` write relative to its `AddInvoices` call), before `Flow Reference: AddInvoicesPetroleum`:
 ```
@@ -1285,6 +1286,8 @@ Set Variable: aqvMap = #[payload]
 
 **Resolved (2026-07-14) — pinned to Version 1**: checking Salesforce revealed 4 `AssessmentQuestionVersion` records for `"Date App Received"` — 2 Archived, 2 Active (`VersionNumber` 1 and 2). Version 1's `DataType` is `Date`, Version 2's is `DateTime`. The generic "latest version wins" reduce (`transform-aqv-lookup.dwl`, ordered by `VersionNumber ASC`, each step overwrites) would always resolve to Version 2 (DateTime), conflicting with the earlier-confirmed plain-Date `DateValue`. **Confirmed: pin to Version 1, keep `DateValue` as Date.** Rather than modifying the shared `transform-aqv-lookup.dwl` (used as-is by Jewelry/Petroleum/BiWeeklyPayroll) with BiWeeklyPayroll-specific logic, the SOQL itself now excludes "Date App Received" from the general `Name IN (...)` list and adds a separate `OR (Name = 'Date App Received' AND VersionNumber = 1)` clause — so only one record ever comes back for that Name, and the generic "latest wins" reduce trivially resolves to it (there's no competing Version 2 in the result set to lose to). First work unit needing to pin a specific AQV version instead of blindly taking the latest.
 
+**Resolved (2026-07-14) — Q1/Q2/Q3 fixed, AQR confirmed working end to end**: root cause was a key mismatch between the `questions` array's `name:` values and the actual `aqvMap` keys (not a Salesforce-side `Name` spelling issue — the query was already correct, as the "13 rows returned" evidence indicated). Once the two were made to match exactly, all 13 AQR records create successfully. **All 13 AQR questions confirmed working in Studio.**
+
 ### Assessment field mapping (confirmed 2026-07-14) and Flow Structure
 | Field | Value |
 |---|---|
@@ -1456,15 +1459,26 @@ Set Variable: accountRecordTypeId = #[payload[0].Id]
 
 **Confirmed working in Studio (2026-07-13)**: trigger → file read → filter transform → `InitAccountRecordTypeBiWeeklyPayroll` → `For Each` → `AddAccount` (Account create) tested successfully. `AddLocationsAndAddressesBiWeeklyPayroll` (Location → Address__c → PartyAddress__c) also confirmed working in Studio.
 
-**Confirmed working in Studio (2026-07-14)**: `AddContactsBiWeeklyPayroll` (Contact create, 0-2 per row) tested successfully. `AddBusinessLicenseAppBiWeeklyPayroll` (BLA → BusinessLicense) also confirmed working.
+**Confirmed working in Studio (2026-07-14)**: `AddContactsBiWeeklyPayroll` (Contact create, 0-2 per row) tested successfully. `AddBusinessLicenseAppBiWeeklyPayroll` (BLA → BusinessLicense) also confirmed working. `InitAssessmentQuestionVersionBiWeeklyPayroll` → Assessment → all 13 AssessmentQuestionResponse questions now confirmed working end to end too, after resolving the `Name`-matching bugs above.
 
-**Not yet wired**: `InitAssessmentQuestionVersionBiWeeklyPayroll` (needed once the AQR question list is known), Account_Status__c nested inside `AddAccount` (deferred — its date-precedence logic isn't decided yet, see Open Questions), and Assessment/Assessment Question Response/Note (fully open, see below).
+**Main per-row chain now fully confirmed working end to end**: Account → Account_Status__c (still deferred, see below) → Location → Address__c → PartyAddress__c → Contact → BLA → BusinessLicense → Assessment → AQR (all 13 questions).
+
+**Not yet wired/resolved**: Account_Status__c nested inside `AddAccount` (deferred — its date-precedence logic isn't decided yet, see Open Questions), and the Note object (details still deferred by the user until everything else is done). These are the only two things left in this work unit.
+
+### Cleanup: `CleanupBiWeeklyPayroll` sub-flow (in progress, 2026-07-14)
+Following the same "separate named sub-flow" pattern just established for Petroleum's `CleanupPetroleum` (rather than inline steps at the tail of the main flow body) — called at the very end of the main flow, after the `For Each` completes:
+
+1. **`import_log.csv`** — File Write (overwrite), content = `#[vars.logEntries as CSV]`. Column order: `RID, object, status, salesforce_id, error_code, error_message` (same shape as Jewelry's `jobno`-keyed and Petroleum's `licenseno`-keyed versions, just `RID`-keyed) — matches the `import_log` Postgres table minus `id`/`logged_at`, same interim reconciliation approach (pgAdmin Import/Export Data tool) documented in section 2.
+2. **`bla_rid_map.csv`** — File Write (overwrite), content = `#[vars.blaRidLog as CSV]` — audit artifact mirroring Jewelry's `bla_jobno_map.csv`/Petroleum's `bla_license_map.csv`, naming matches the `blaRidLog` variable.
+3. **Processed file archiving** — File Move `C:\data\BiWeeklyPayroll.csv` → `C:\data\processed\`, done **last** (after both writes above), same reasoning as Jewelry/Petroleum: if the flow errors out partway through, the source file is still in `C:\data\` for investigation/retry rather than already relocated. Only one file to move here (vs. Jewelry/Petroleum's two), since BiWeeklyPayroll has a single source file.
+
+**TODO (cross-work-unit)**: Jewelry still doesn't have its own cleanup sub-flow either — retrofit it with a `CleanupJewelry` sub-flow (same pattern: `import_log.csv` write, `LaborStd.csv`/`LaborAR.csv` archiving) once Petroleum's and BiWeeklyPayroll's are both confirmed working, so all three work units follow the same convention.
 
 ### Open questions
 - All the "not yet mapped" items above — need per-field Salesforce mapping decisions before transforms can be written.
 - Does Account_Status__c still apply the same way, and what's the precedence across `DateRecd/DateApproved/DateDenied/DateExpired/DateRevoked` for deriving status? Needs a real answer now that the file's grain is confirmed one-row-per-job.
-- Does BiWeeklyPayroll need the Sent Invoice cutover logic (`AddSentInvoice`, section 4)? Almost certainly **no**, doubly so now that Invoice/Payment aren't loaded at all — that's a one-time Jewelry-specific cutover tied to Invoice creation, not carried forward unless told otherwise.
-- Does BiWeeklyPayroll need its own `InitAccountRecordType` sub-flow (query-based, like Petroleum) or will it hardcode `RecordTypeId` like Jewelry currently does? Default to the query-based approach given Jewelry's hardcoded version is flagged as a known problem (breaks on sandbox refresh).
+- ~~Does BiWeeklyPayroll need the Sent Invoice cutover logic (`AddSentInvoice`, section 4)?~~ — moot, confirmed no Invoice/Payment loading at all for this unit.
+- ~~Does BiWeeklyPayroll need its own `InitAccountRecordType` sub-flow (query-based, like Petroleum) or will it hardcode `RecordTypeId` like Jewelry currently does?~~ — resolved: query-based `InitAccountRecordTypeBiWeeklyPayroll`, confirmed working in Studio.
 
 ---
 
