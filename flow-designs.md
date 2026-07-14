@@ -1287,7 +1287,7 @@ Set Variable: aqvMap = #[payload]
 | `AssessmentStatus` | `"Completed"` |
 | `Name` | `"Universal License Assessment"` — same as Petroleum's (both differ from Jewelry's `"Business License Assessment"`) |
 | `EffectiveDateTime` | Later of `DateApproved`/`DateRenewed` (same null-safe `laterDate` helper as `transform-business-license-biweeklypayroll.dwl`, duplicated in this file), converted to a `DateTime` string (`yyyy-MM-dd'T'HH:mm:ssX`), matching Jewelry/Petroleum's `EffectiveDateTime` shape |
-| `ExpirationDate` | `DateExpired`, parsed to a native `Date` — **new field**, not populated by Jewelry/Petroleum's Assessment transforms at all |
+| `ExpirationDateTime` | `DateExpired`, converted to a `DateTime` string (same `yyyy-MM-dd'T'HH:mm:ssX` shape as `EffectiveDateTime`) — **new field**, not populated by Jewelry/Petroleum's Assessment transforms at all. **Corrected 2026-07-14**: field name is `ExpirationDateTime`, not `ExpirationDate` (was assumed to be a plain Date field; it's actually a DateTime field like `EffectiveDateTime`) |
 | `Type` | `"LicensingAndPermitting"` — same as Jewelry/Petroleum |
 
 Built `transform-assessment-biweeklypayroll.dwl` implementing this.

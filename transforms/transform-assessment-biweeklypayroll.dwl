@@ -21,13 +21,18 @@ var effectiveDateTime =
     else null
 
 var expirationDate = parseDate(vars.row.DateExpired)
+
+var expirationDateTime =
+    if (expirationDate != null)
+        ((expirationDate as String {format: "yyyy-MM-dd"}) ++ "T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
+    else null
 ---
 {
     AccountId: vars.accountId,
     AssessmentStatus: "Completed",
     Name: "Universal License Assessment",
     EffectiveDateTime: effectiveDateTime,
-    ExpirationDate: expirationDate,
+    ExpirationDateTime: expirationDateTime,
     Type: "LicensingAndPermitting",
     BusinessLicenseApplication__c: vars.blaId
 }
