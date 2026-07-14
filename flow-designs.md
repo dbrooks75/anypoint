@@ -1214,21 +1214,21 @@ Note: unlike Jewelry/Petroleum, there's no `AddInvoices`-equivalent needing `bla
 **Naming note (2026-07-14)**: this variable is called `blaRidLog` (RID-keyed), deliberately distinct from Jewelry's `blaJobnoLog` and Petroleum's `blaLicenseLog` — same "keep each work unit's variable names distinct even when the shape is identical" preference already established between Jewelry and Petroleum.
 
 ### Assessment Question Response — question list confirmed (2026-07-14), field mapping still open
-13 questions total (vs. Jewelry's 7, Petroleum's 6) — `InitAssessmentQuestionVersionBiWeeklyPayroll` will need `Name IN (...)` with this exact list, same pattern as `InitAssessmentQuestionVersion`/`InitAssessmentQuestionVersionPetroleum`:
+13 questions total (vs. Jewelry's 7, Petroleum's 6). The full sentences below are the **question wording** (for readability in this doc only) — **corrected 2026-07-14**: the actual `AssessmentQuestionVersion.Name` value used in `WHERE Name IN (...)` and the transform's `aqvMap` lookup key is the short label in parens, not the full sentence (the user's first pass gave the full sentences as the `Name` values, which was wrong — `Name` is a short label, `QuestionText` is the full sentence, and the SOQL/transform were querying/looking up on the wrong one):
 
-1. Does the company's average payroll exceed 200% of State minimum wage?
-2. Did the company have payroll during the entire last calendar year?
-3. Estimated Biweekly Wages
-4. Payment Method
-5. Payment Day
-6. Employee Class
-7. Salary Min
-8. Salary Max
-9. Bond Value
-10. Bond Expiration Date
-11. Has said company ever had a wage and hour violation?
-12. Are the involved employees subject to collective bargaining?
-13. Date Application Received
+1. Does the company's average payroll exceed 200% of State minimum wage? (`Name`: "Avg Payroll Exceed 200")
+2. Did the company have payroll during the entire last calendar year? (`Name`: "Company Payroll")
+3. Estimated Biweekly Wages (`Name`: "Estimated Wages")
+4. Payment Method (`Name`: "Payment Method")
+5. Payment Day (`Name`: "Payment Day")
+6. Employee Class (`Name`: "Employee Class")
+7. Salary Min (`Name`: "Salary Min")
+8. Salary Max (`Name`: "Salary Max")
+9. Bond Value (`Name`: "Bond Value")
+10. Bond Expiration Date (`Name`: "Bond Expiration Date")
+11. Has said company ever had a wage and hour violation? (`Name`: "Pay Violation")
+12. Are the involved employees subject to collective bargaining? (`Name`: "Collective Bargaining")
+13. Date Application Received (`Name`: "Date Application Received")
 
 **Per-question field mapping (confirmed so far, gathered one at a time, 2026-07-14)**:
 | # | Question | ResponseType | Value |
@@ -1258,9 +1258,9 @@ Same pattern as `InitAssessmentQuestionVersion`/`InitAssessmentQuestionVersionPe
 ```
 Salesforce Query: SELECT Id, QuestionText, Name, VersionNumber FROM AssessmentQuestionVersion
                    WHERE Name IN (
-                       'Does the company''s average payroll exceed 200% of State minimum wage?',
-                       'Did the company have payroll during the entire last calendar year?',
-                       'Estimated Biweekly Wages',
+                       'Avg Payroll Exceed 200',
+                       'Company Payroll',
+                       'Estimated Wages',
                        'Payment Method',
                        'Payment Day',
                        'Employee Class',
@@ -1268,8 +1268,8 @@ Salesforce Query: SELECT Id, QuestionText, Name, VersionNumber FROM AssessmentQu
                        'Salary Max',
                        'Bond Value',
                        'Bond Expiration Date',
-                       'Has said company ever had a wage and hour violation?',
-                       'Are the involved employees subject to collective bargaining?',
+                       'Pay Violation',
+                       'Collective Bargaining',
                        'Date Application Received'
                    ) AND Status = 'Active'
                    ORDER BY Name ASC, VersionNumber ASC
@@ -1277,7 +1277,7 @@ Transform Message (transform-aqv-lookup.dwl — reused as-is from Jewelry/Petrol
   variant needed, it's a generic reduce-by-Name with no work-unit-specific logic)
 Set Variable: aqvMap = #[payload]
 ```
-Note the escaped apostrophe (`''`) in "the company's" for the SOQL string literal — the only question name with a literal apostrophe.
+**Correction (2026-07-14)**: this query previously used the full question sentences as `Name` values (matching what `transform-assessment-question-response-biweeklypayroll.dwl`'s `questions` array also had in its `name:` field, used as the `aqvMap` lookup key) — both were wrong. Salesforce's `AssessmentQuestionVersion.Name` is the short label shown above; the full sentence is `QuestionText` (already correctly used for the created `AssessmentQuestionResponse.Name` in the transform's output). Fixed both the SOQL and the transform's `name:` keys to use the short labels. No more apostrophe-escaping concern now that "the company's" isn't in a `Name` value — none of the corrected short labels contain an apostrophe.
 
 ### Assessment field mapping (confirmed 2026-07-14) and Flow Structure
 | Field | Value |
