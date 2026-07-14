@@ -1323,7 +1323,7 @@ fun getBiweeklySalary(rangeStr, selector) = do {
     if (trim(raw) == "" or (sel != "min" and sel != "max")) 0
     else do {
         var c1 = lower(raw)
-        var c2 = c1 replace "$" with ""
+        var c2 = c1 replace /\$/ with ""
         var c3 = c2 replace "," with ""
         var c4 = c3 replace "+" with ""
         var c5 = c4 replace " to " with "-"
@@ -1377,6 +1377,8 @@ Notes/assumptions made porting this:
 - VB's `CInt(...)` (rounds to nearest integer, banker's rounding on exact `.5`) ported as DataWeave's `round(...)` (rounds half away from zero) — behaviorally identical except on an exact `.5` tie, considered close enough not to block on.
 - The VB source's `"/ annually"` replace has a literal space after the slash (`"/ annually"`, not `"/annually"`) — transcribed verbatim, not a typo I introduced.
 - A companion `GetBusinessEntityType` VB function was also visible in the same screenshot (`I`→"Sole Proprietorship", `P`→"General Partnership", `C`→"Corporation For Profit") — confirms this is the same client helper library Jewelry's `businessEntityTypes` map in `transform2-account.dwl` was originally sourced from. Not relevant to BiWeeklyPayroll (its `Business_Entity_Type__c` is hardcoded `"Customer"`, already confirmed) — noted for context only, no action needed.
+
+**Fix (2026-07-14) — `"Unable to resolve reference of: '$'"` error in Studio**: the `c1 replace "$" with ""` step (stripping a leading currency symbol) hit a parse error in Studio's Transform Message component. The repo's copy of the file has plain straight quotes, so this is most likely a copy-paste artifact (e.g. curly/smart quotes introduced when pasting from an email into Studio, making the parser see a bare `$` outside any string). Changed to a regex literal, `replace /\$/ with ""`, which sidesteps the ambiguity — regex literals are less prone to this class of paste issue and are the more idiomatic DataWeave way to match a special character like `$` regardless. **Not yet confirmed fixed in Studio** — verify after re-pasting this line.
 
 **`normalizePaymentMethods` helper (confirmed 2026-07-14, ported from a client-provided VB script, `NormalizePaymentMethods` in a `Helpers` module)** — non-exclusive substring matching against `MethodPaid`, joined with `"; "` when multiple match, defaults to `"Other"` only when the input is non-blank but nothing matched (blank input stays blank, doesn't become `"Other"`):
 ```
@@ -1491,6 +1493,15 @@ Fix — always wrap the `filter` call in explicit parens when chaining into `map
   map (row) -> BODY
 ```
 Applied in `transform1-filter-and-name.dwl` and `transform-ar-filter-and-name.dwl`.
+
+### Gotcha: `contains` binds looser than `or`/`and` — wrap each `contains` in explicit parens when chaining
+`A contains B or C contains D` does **not** parse as `(A contains B) or (C contains D)` — `contains` has lower precedence than `or`, so it actually parses as `A contains (B or (C contains D))`, which tries to evaluate `B or (C contains D)` where `B` is a plain String, throwing `Cannot coerce String ('...') to Boolean` (the error points at the string literal, not the `contains` keyword, which is a bit misleading at first).
+
+Fix — wrap every `contains` expression in its own parens before combining with `or`/`and`:
+```
+(A contains B) or (C contains D)
+```
+Found and fixed in `transform-assessment-question-response-biweeklypayroll.dwl` (2026-07-14) — `normalizePaymentMethods`'s `"pay card"`/`"paycard"` check and `getBiweeklySalary`'s pay-period keyword detection (`"week"`/`"biweekly"`, `"year"`/`"annual"`/`"annually"`) both hit this; `normalizeDayValue`'s day-matching `filter` was already written with the parens and didn't need fixing. Same category of DataWeave operator-precedence surprise as the `filter`/`map` gotcha above — worth checking for this pattern (`contains ... or/and ... contains`) in any future ported/translated logic, since it's easy to write unconsciously when porting from a language (like VB) where `Or`/`And` bind differently.
 
 ### Log payload as JSON
 ```

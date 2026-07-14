@@ -12,7 +12,7 @@ fun normalizePaymentMethods(raw) = do {
         var parts = [
             if (lowerStr contains "check") "Check" else null,
             if (lowerStr contains "direct deposit") "Direct Deposit" else null,
-            if (lowerStr contains "pay card" or lowerStr contains "paycard") "Pay Card" else null,
+            if ((lowerStr contains "pay card") or (lowerStr contains "paycard")) "Pay Card" else null,
             if (lowerStr contains "other") "Other" else null
         ] filter (p) -> p != null
         ---
@@ -48,7 +48,7 @@ fun getBiweeklySalary(rangeStr, selector) = do {
     if (trim(raw) == "" or (sel != "min" and sel != "max")) 0
     else do {
         var c1 = lower(raw)
-        var c2 = c1 replace "$" with ""
+        var c2 = c1 replace /\$/ with ""
         var c3 = c2 replace "," with ""
         var c4 = c3 replace "+" with ""
         var c5 = c4 replace " to " with "-"
@@ -56,8 +56,8 @@ fun getBiweeklySalary(rangeStr, selector) = do {
 
         var detectedPayType =
             if (c6 contains "hour") "hourly"
-            else if (c6 contains "week" or c6 contains "biweekly") "biweekly"
-            else if (c6 contains "year" or c6 contains "annual" or c6 contains "annually") "annual"
+            else if ((c6 contains "week") or (c6 contains "biweekly")) "biweekly"
+            else if ((c6 contains "year") or (c6 contains "annual") or (c6 contains "annually")) "annual"
             else ""
 
         var d1 = c6 replace "per hour" with ""
