@@ -1228,7 +1228,7 @@ Note: unlike Jewelry/Petroleum, there's no `AddInvoices`-equivalent needing `bla
 10. Bond Expiration Date (`Name`: "Bond Expiration Date")
 11. Has said company ever had a wage and hour violation? (`Name`: "Pay Violation")
 12. Are the involved employees subject to collective bargaining? (`Name`: "Collective Bargaining")
-13. Date Application Received (`Name`: "Date Application Received")
+13. Date Application Received (`Name`: "Date App Received")
 
 **Per-question field mapping (confirmed so far, gathered one at a time, 2026-07-14)**:
 | # | Question | ResponseType | Value |
@@ -1249,7 +1249,7 @@ Note: unlike Jewelry/Petroleum, there's no `AddInvoices`-equivalent needing `bla
 | 10 | Bond Expiration Date | `Text Area` | `ResponseText: null` — hardcoded placeholder, same as Q9 |
 | 11 | Wage and hour violation? | `Text Area` | `ResponseText: if ((WageHrViol default "") == "Yes") "Yes" else "No"` — `WageHrViol` can be null, treated as `"No"` |
 | 12 | Subject to collective bargaining? | `Text Area` | `ResponseText: if ((ConsentColBargChk default "") == "Yes") "Yes" else "No"` — `ConsentColBargChk` can be null; else-branch **inferred** as `"No"` to match every other Yes/No question's pattern (Q1, Q2, Q11) — user only stated the `"Yes"` condition this time, didn't explicitly restate the else, flag if wrong |
-| 13 | Date Application Received | `Text Area` | `DateValue: if ((DateRecd default "") != "") DateRecd as Date {format: "M/d/yyyy"} else null` — native Date field (confirmed, not a text field), same pattern as Jewelry/Petroleum's `DateValue` fields — no output-format string needed, Salesforce handles Date serialization |
+| 13 | Date Application Received | `Text Area` | `DateValue: if ((DateRecd default "") != "") DateRecd as Date {format: "M/d/yyyy"} else null` — native Date field (confirmed, not a text field), same pattern as Jewelry/Petroleum's `DateValue` fields — no output-format string needed, Salesforce handles Date serialization. **Corrected 2026-07-14**: real `AssessmentQuestionVersion.Name` is `"Date App Received"`, not `"Date Application Received"` — same short label Jewelry already uses (`transform-assessment-question-response.dwl`), Petroleum's is `"PET Date App Received"`. This was the actual cause of the missing `aqvMap` key, not a Status/Active issue as first suspected — still need to resolve the DataType Date-vs-DateTime conflict below before this is fully confirmed working |
 
 **All 13 questions now mapped.** Built `transform-assessment-question-response-biweeklypayroll.dwl` — bundles all four ported VB helpers (`normalizePaymentMethods`, `normalizeDayValue`, `safeVal`, `getBiweeklySalary`/`convertToBiweekly`) inline, same "duplicate shared helpers per work unit" pattern as `stateNames`/`fixFein` in the Account transforms.
 
@@ -1257,20 +1257,22 @@ Note: unlike Jewelry/Petroleum, there's no `AddInvoices`-equivalent needing `bla
 Same pattern as `InitAssessmentQuestionVersion`/`InitAssessmentQuestionVersionPetroleum` (section 2/6) — query all 13 question names, reduce to latest version per question:
 ```
 Salesforce Query: SELECT Id, QuestionText, Name, VersionNumber FROM AssessmentQuestionVersion
-                   WHERE Name IN (
-                       'Avg Payroll Exceed 200',
-                       'Company Payroll',
-                       'Estimated Wages',
-                       'Payment Method',
-                       'Payment Day',
-                       'Employee Class',
-                       'Salary Min',
-                       'Salary Max',
-                       'Bond Value',
-                       'Bond Expiration Date',
-                       'Pay Violation',
-                       'Collective Bargaining',
-                       'Date Application Received'
+                   WHERE (
+                       Name IN (
+                           'Avg Payroll Exceed 200',
+                           'Company Payroll',
+                           'Estimated Wages',
+                           'Payment Method',
+                           'Payment Day',
+                           'Employee Class',
+                           'Salary Min',
+                           'Salary Max',
+                           'Bond Value',
+                           'Bond Expiration Date',
+                           'Pay Violation',
+                           'Collective Bargaining'
+                       )
+                       OR (Name = 'Date App Received' AND VersionNumber = 1)
                    ) AND Status = 'Active'
                    ORDER BY Name ASC, VersionNumber ASC
 Transform Message (transform-aqv-lookup.dwl — reused as-is from Jewelry/Petroleum, no BiWeeklyPayroll
@@ -1278,6 +1280,10 @@ Transform Message (transform-aqv-lookup.dwl — reused as-is from Jewelry/Petrol
 Set Variable: aqvMap = #[payload]
 ```
 **Correction (2026-07-14)**: this query previously used the full question sentences as `Name` values (matching what `transform-assessment-question-response-biweeklypayroll.dwl`'s `questions` array also had in its `name:` field, used as the `aqvMap` lookup key) — both were wrong. Salesforce's `AssessmentQuestionVersion.Name` is the short label shown above; the full sentence is `QuestionText` (already correctly used for the created `AssessmentQuestionResponse.Name` in the transform's output). Fixed both the SOQL and the transform's `name:` keys to use the short labels. No more apostrophe-escaping concern now that "the company's" isn't in a `Name` value — none of the corrected short labels contain an apostrophe.
+
+**Debugging note (2026-07-14)**: testing showed 12 of 13 `aqvMap` keys resolve correctly; `"Date Application Received"` came back missing, causing `Required_Field_Missing [Name, AssessmentQuestionId]` on that one AQR record (null-safe selector on a missing map key silently returns `null`, same failure shape as the Petroleum `vars.arRows`/`vars.mercArRows` lesson — surfaces downstream, not at the actual cause). **Root cause found**: the real Salesforce `Name` is `"Date App Received"`, not `"Date Application Received"` — a spec-vs-Salesforce mismatch, not a Status/Active issue. Fixed in the SOQL and the transform's `name:` key.
+
+**Resolved (2026-07-14) — pinned to Version 1**: checking Salesforce revealed 4 `AssessmentQuestionVersion` records for `"Date App Received"` — 2 Archived, 2 Active (`VersionNumber` 1 and 2). Version 1's `DataType` is `Date`, Version 2's is `DateTime`. The generic "latest version wins" reduce (`transform-aqv-lookup.dwl`, ordered by `VersionNumber ASC`, each step overwrites) would always resolve to Version 2 (DateTime), conflicting with the earlier-confirmed plain-Date `DateValue`. **Confirmed: pin to Version 1, keep `DateValue` as Date.** Rather than modifying the shared `transform-aqv-lookup.dwl` (used as-is by Jewelry/Petroleum/BiWeeklyPayroll) with BiWeeklyPayroll-specific logic, the SOQL itself now excludes "Date App Received" from the general `Name IN (...)` list and adds a separate `OR (Name = 'Date App Received' AND VersionNumber = 1)` clause — so only one record ever comes back for that Name, and the generic "latest wins" reduce trivially resolves to it (there's no competing Version 2 in the result set to lose to). First work unit needing to pin a specific AQV version instead of blindly taking the latest.
 
 ### Assessment field mapping (confirmed 2026-07-14) and Flow Structure
 | Field | Value |

@@ -136,7 +136,7 @@ var questions = [
     { name: "Collective Bargaining",
       choiceValue: null, dateValue: null, integerValue: null,
       responseText: if ((vars.row.ConsentColBargChk default "") == "Yes") "Yes" else "No" },
-    { name: "Date Application Received",
+    { name: "Date App Received",
       choiceValue: null, dateValue: if (dateRecd != "") dateRecd as Date {format: "M/d/yyyy"} else null, integerValue: null,
       responseText: null }
 ]
