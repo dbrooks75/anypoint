@@ -44,5 +44,6 @@ var stateNames = {
                    (if ((vars.row.add2 default "") != "") " " ++ (vars.row.add2 default "") else ""),
     BillingCity: vars.row.city,
     BillingState: stateNames[vars.row.state default ""] default (vars.row.state default ""),
-    BillingPostalCode: vars.row.zip
+    BillingPostalCode: vars.row.zip,
+    Preferred_Method_of_Comm__c: "Mail"
 }

@@ -1054,6 +1054,7 @@ Run once at flow start, same as Petroleum's `InitAccountRecordTypePetroleum` (se
 | `BillingCity` | `CompanyCity` | |
 | `BillingState` | `CompanyState` | Same `stateNames` 2-letter→full-name lookup table as Jewelry/Petroleum (`transform2-account.dwl`/`transform-account-petroleum.dwl`), fallback to raw value if not found |
 | `BillingPostalCode` | `CompanyZip` | |
+| `Preferred_Method_of_Comm__c` | — | Hardcoded `"Mail"` (2026-07-15) — same for all three units (Jewelry `transform2-account.dwl`, Petroleum `transform-account-petroleum.dwl`, BiWeeklyPayroll `transform-account-biweeklypayroll.dwl`); no source field, new Account field added across all three at once |
 
 Built `transform-account-biweeklypayroll.dwl` (new file) implementing this — `fixFein` and `stateNames` duplicated in-file, same pattern as Petroleum's copy in `transform-account-petroleum.dwl`.
 
