@@ -11,14 +11,22 @@ var latestArRow = if (sizeOf(matchingArRows) > 0)
   else null
 
 var amountPaid = if (latestArRow != null) latestArRow.tot_pymt_amt as Number else null
+
+// Status: Current-year records are Approved only if AR shows a 2026 deposit_date; Historical is always Approved
+var currentYearArRows = matchingArRows filter (row) ->
+    (row.deposit_date default "") != "" and ((row.deposit_date as Date {format: "M/d/yyyy"}) as String {format: "yyyy"}) == "2026"
+
+var hasCurrentYearDeposit = sizeOf(currentYearArRows) > 0
+
+var status = if ((vars.row.SourceFileType default "") == "Current")
+        (if (hasCurrentYearDeposit) "Approved" else "Draft")
+    else "Approved"
 ---
 {
     AccountId: vars.accountId,
-    // Placeholder — Jewelry derives New/Renewal from jobno's last 2 digits, but MercStd has no
-    // jobno field at all (licenseno-only) — see dev-questions.md for what should drive this
-    ApplicationType: "TBD",
+    ApplicationType: "New",
     AmountPaid: amountPaid,
-    Status: "Approved",
+    Status: status,
     // Placeholder — see dev-questions.md for what this should actually be
     AppliedDate: |1900-01-01T00:00:00Z|,
     Category: "License",

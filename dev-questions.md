@@ -10,5 +10,5 @@
 8. BusinessLicenseApplication.AppliedDate is required but we don't have a real source value for it (previously derived from issue_date, which isn't the right field). Currently hardcoded to a 1/1/1900 placeholder in transform-bla.dwl — what should this actually be?
 9. Petroleum: what should BusinessLicenseApplication.Trade__c be? Jewelry hardcodes "Labor Standards" — currently hardcoded to a "TBD" placeholder in transform-bla-petroleum.dwl.
 10. Petroleum: what is the real source/value for each vehicle's `registrationExpiry` in the PET_Delivery_Vehicles JSON? Currently hardcoded to a `"2026-04-09"` placeholder in transform-vehicles-petroleum.dwl (same treatment as the AppliedDate placeholder in #8).
-11. Petroleum: what should BusinessLicenseApplication.ApplicationType (New/Renewal) be based on? Jewelry derives it from the last 2 digits of jobno, but MercStd.csv has no jobno field at all — it's licenseno-only. Currently hardcoded to a "TBD" placeholder in transform-bla-petroleum.dwl.
+11. ~~Petroleum: what should BusinessLicenseApplication.ApplicationType (New/Renewal) be based on?~~ Resolved (2026-07-15) — hardcoded to "New" in transform-bla-petroleum.dwl.
 12. ~~Does the integration user's profile have Edit access to Payment__c.Notes__c?~~ Confirmed working — same class of issue as #3 (missing FLS), granted Edit access.

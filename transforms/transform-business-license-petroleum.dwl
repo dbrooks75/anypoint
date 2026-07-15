@@ -4,6 +4,11 @@ output application/java
 var licenseno = vars.row.licenseno default ""
 var issueDate = vars.row.date_issued default ""
 
+// Zero-pad licenseno to 7 digits for the Name (e.g. "123" -> "0000123")
+var licensenoDigits = licenseno as String
+var licensenoPaddedFull = "0000000" ++ licensenoDigits
+var licensenoPadded = licensenoPaddedFull[(sizeOf(licensenoPaddedFull) - 7) to (sizeOf(licensenoPaddedFull) - 1)]
+
 var issueDateParsed = issueDate as Date {format: "M/d/yyyy"}
 
 var issueDateTime =
@@ -23,7 +28,7 @@ var expirationDateTime =
 {
     AccountId: vars.accountId,
     Business_License_Application__c: vars.blaId,
-    Name: "PET-" ++ licenseno,
+    Name: "PET-" ++ licensenoPadded,
     Issue_Date__c: issueDateTime,
     PeriodStart: issueDateTime,
     PeriodEnd: expirationDateTime,
