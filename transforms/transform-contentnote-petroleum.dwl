@@ -1,5 +1,6 @@
 %dw 2.0
 output application/java
+import toBase64 from dw::core::Binaries
 
 var certificate = vars.row.certificate default ""
 var certifDmv = vars.row.certif_dmv default ""
@@ -11,7 +12,7 @@ var html = "<p>Certificate: " ++ certificate ++ "</p>" ++
            "<p>Certificate GU: " ++ certifGu ++ "</p>" ++
            "<p>Comments: " ++ comments ++ "</p>"
 
-var htmlBase64 = (html as Binary {encoding: "UTF-8"}) as String {encoding: "base64"}
+var htmlBase64 = toBase64(html)
 ---
 {
     Title: "Petroleum Conversion",
