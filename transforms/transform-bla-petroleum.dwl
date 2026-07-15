@@ -21,6 +21,13 @@ var hasCurrentYearDeposit = sizeOf(currentYearArRows) > 0
 var status = if ((vars.row.SourceFileType default "") == "Current")
         (if (hasCurrentYearDeposit) "Approved" else "Draft")
     else "Approved"
+
+var insExpireDate = vars.row.ins_expire_date default ""
+
+var insExpireDateParsed =
+    if (insExpireDate != "")
+        (insExpireDate as Date {format: "M/d/yyyy"} as String {format: "yyyy-MM-dd"}) as Date {format: "yyyy-MM-dd"}
+    else null
 ---
 {
     AccountId: vars.accountId,
@@ -33,5 +40,6 @@ var status = if ((vars.row.SourceFileType default "") == "Current")
     // Placeholder — see dev-questions.md for what Trade__c should be for Petroleum
     Trade__c: "TBD",
     LicenseTypeId: vars.licenseTypeId,
-    Description: "Legacy License Number: " ++ licenseno
+    Description: "Legacy License Number: " ++ licenseno,
+    Policy_Expiration_Date__c: insExpireDateParsed
 }
