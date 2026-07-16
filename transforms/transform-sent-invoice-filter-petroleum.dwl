@@ -12,4 +12,4 @@ fun hasCurrentYearDeposit(licenseno: String) =
     ) > 0
 ---
 vars.blaLicenseLog filter (entry) ->
-    (entry.sourceFileType == "Current") and not hasCurrentYearDeposit(entry.licenseno)
+    (entry.sourceFileType == "Current") and (not hasCurrentYearDeposit(entry.licenseno))
