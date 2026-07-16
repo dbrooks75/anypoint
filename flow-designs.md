@@ -117,6 +117,13 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
               (Parameters: #[{invoiceId: vars.invoiceId}])
           → Salesforce Delete (InvoiceLine__c)
           → Salesforce Delete (Invoice__c)
+      → Salesforce Query: SELECT Id FROM Business_License_Application__c WHERE Account__c = :accountId
+          (Parameters: #[{accountId: vars.accountId}])
+      → For Each (loop over BLAs)
+          → Set Variable (blaId)
+          → Salesforce Query: SELECT ContentDocumentId FROM ContentDocumentLink WHERE LinkedEntityId = :blaId
+              (Parameters: #[{blaId: vars.blaId}])
+          → Salesforce Delete (ContentNote, Ids = extracted ContentDocumentId list — see note below)
   → Logger
 ```
 
@@ -124,11 +131,14 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
 1. Payment__c (child of Invoice__c via Payment__c.Invoice__c)
 2. InvoiceLine__c (child of Invoice__c via InvoiceLine__c.Invoice__c)
 3. Invoice__c
-4. Address__c (child of Location via Address__c.ParentId)
-5. Location (TODO: add to delete flow)
-6. Account_Status__c (child of Account via Account_Status__c.Account__c) — added to delete flow
-7. Entity_Identifier__c (child of Account) — added to delete flow. Not created by the Mule load flow at all — it's auto-created by a Salesforce trigger (off Account creation, presumably), so it never appeared anywhere in the load design, but still needs cleanup on delete since it's still a real child record of Account
-8. (Account deletion TBD)
+4. **ContentNote** (new, 2026-07-16, Petroleum only so far — see note below) — looked up via `ContentDocumentLink.LinkedEntityId = blaId`, not `Account__c` directly, so this branch needs its own `Business_License_Application__c WHERE Account__c = :accountId` query first (the delete flow didn't need a BLA lookup at all before this)
+5. Address__c (child of Location via Address__c.ParentId)
+6. Location (TODO: add to delete flow)
+7. Account_Status__c (child of Account via Account_Status__c.Account__c) — added to delete flow
+8. Entity_Identifier__c (child of Account) — added to delete flow. Not created by the Mule load flow at all — it's auto-created by a Salesforce trigger (off Account creation, presumably), so it never appeared anywhere in the load design, but still needs cleanup on delete since it's still a real child record of Account
+9. (Account deletion TBD)
+
+**ContentNote/ContentDocumentLink note (2026-07-16, unconfirmed)**: only `ContentNote` is explicitly deleted above, not `ContentDocumentLink` — deleting a `ContentDocument`/`ContentNote` is expected to cascade-delete its `ContentDocumentLink` rows automatically (standard Salesforce Files behavior), so no separate delete step should be needed for the Link. **Not yet verified against this org** — confirm in testing that the `ContentDocumentLink` row actually disappears once its `ContentNote` is deleted, and add an explicit `ContentDocumentLink` delete step here if it doesn't. Also note `Business_License_Application__c` itself (and `BusinessLicense`/`Assessment`/`AssessmentQuestionResponse`) still aren't in this Delete Order at all — unclear whether that's an existing gap (never handled) or those are master-detail children of Account that Salesforce cascade-deletes automatically. Worth resolving that question generally, since it affects whether the new BLA lookup added here for ContentNote is even necessary once BLA-level deletion is sorted out.
 
 ### Key Notes
 - Use **Set Variable** immediately after each Salesforce Query to save IDs — the payload is overwritten by the next operation
@@ -399,7 +409,8 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
   → Flow Reference: AddSentInvoice (see section 4 — self-contained: filters vars.blaJobnoLog to Current-sourced accounts and loops internally, creating Invoice__c "Sent" + InvoiceLine__c per account, no Payment__c)
       (Runs after AddInvoices completes entirely, so every AR-driven invoice for every BLA already exists — this is what makes each account's Sent invoice the most recently created one, which is what the Salesforce trigger uses to mark it "Active" on the BLA)
 
-  → File Write: C:\data\import_log.csv (overwrite, content = vars.logEntries as CSV — single write covering the whole combined run; column order: jobno, object, status, salesforce_id, error_code, error_message, matching import_log table minus id/logged_at)
+  → Set Variable: logFilename = #["C:\data\import_log_" ++ (now() as String {format: 'yyyyMMdd_HHmm'}) ++ ".csv"]
+  → File Write: #[vars.logFilename] (overwrite, content = vars.logEntries as CSV — single write covering the whole combined run; column order: jobno, object, status, salesforce_id, error_code, error_message, matching import_log table minus id/logged_at; timestamped filename, 2026-07-16 — see note below)
   → File Move: C:\data\LaborStd.csv → C:\data\processed\
   → File Move: C:\data\LaborAR.csv → C:\data\processed\
 ```
@@ -822,7 +833,7 @@ For Each row: (Collection: #[vars.mercStdRows])
                     Otherwise: (skip — ContentNote failed)
             Otherwise: (skip — BLA failed, BL/Assessment/AQR/ContentNote not attempted)
 ```
-**Update (2026-07-14)**: `import_log.csv`/processed-file-archiving now built as a separate **`CleanupPetroleum`** sub-flow, called at the very end of the main flow (after the `For Each`, `AddInvoicesPetroleum`, **and now `AddSentInvoicePetroleum`** — see below — all complete) — kept as its own named sub-flow rather than inline steps at the tail of the main flow body, for the same "one responsibility per sub-flow" reasoning as `AddAccount`/`AddContacts`/etc. Contains: File Write `import_log.csv` (`vars.logEntries as CSV`), then File Move `MercStd.csv`/`MercAR.csv`/all 4 truck files → `C:\data\processed\`, done last so a mid-flow error leaves source files in place for retry. **TODO**: Jewelry doesn't have this yet either — retrofit Jewelry with its own `CleanupJewelry` sub-flow (same pattern, `LaborStd.csv`/`LaborAR.csv`) at some point.
+**Update (2026-07-14)**: `import_log.csv`/processed-file-archiving now built as a separate **`CleanupPetroleum`** sub-flow, called at the very end of the main flow (after the `For Each`, `AddInvoicesPetroleum`, **and now `AddSentInvoicePetroleum`** — see below — all complete) — kept as its own named sub-flow rather than inline steps at the tail of the main flow body, for the same "one responsibility per sub-flow" reasoning as `AddAccount`/`AddContacts`/etc. Contains: Set Variable `logFilename` (built once, timestamped — see note below), then File Write `#[vars.logFilename]` (`vars.logEntries as CSV`), then File Move `MercStd.csv`/`MercAR.csv`/all 4 truck files → `C:\data\processed\`, done last so a mid-flow error leaves source files in place for retry. **TODO**: Jewelry doesn't have this yet either — retrofit Jewelry with its own `CleanupJewelry` sub-flow (same pattern, `LaborStd.csv`/`LaborAR.csv`) at some point.
 
 Right after the main `For Each` completes (same position as Jewelry's `bla_jobno_map.csv` write relative to its `AddInvoices` call), before `Flow Reference: AddInvoicesPetroleum`:
 ```
@@ -1526,7 +1537,7 @@ Set Variable: accountRecordTypeId = #[payload[0].Id]
 ### Cleanup: `CleanupBiWeeklyPayroll` sub-flow (confirmed working in Studio, 2026-07-14)
 Following the same "separate named sub-flow" pattern just established for Petroleum's `CleanupPetroleum` (rather than inline steps at the tail of the main flow body) — called at the very end of the main flow, after the `For Each` completes:
 
-1. **`import_log.csv`** — File Write (overwrite), content = `#[vars.logEntries as CSV]`. Column order: `RID, object, status, salesforce_id, error_code, error_message` (same shape as Jewelry's `jobno`-keyed and Petroleum's `licenseno`-keyed versions, just `RID`-keyed) — matches the `import_log` Postgres table minus `id`/`logged_at`, same interim reconciliation approach (pgAdmin Import/Export Data tool) documented in section 2.
+1. **`import_log.csv`, timestamped filename** — Set Variable `logFilename` (built once, see note below), then File Write (overwrite) to `#[vars.logFilename]`, content = `#[vars.logEntries as CSV]`. Column order: `RID, object, status, salesforce_id, error_code, error_message` (same shape as Jewelry's `jobno`-keyed and Petroleum's `licenseno`-keyed versions, just `RID`-keyed) — matches the `import_log` Postgres table minus `id`/`logged_at`, same interim reconciliation approach (pgAdmin Import/Export Data tool) documented in section 2.
 2. **`bla_rid_map.csv`** — File Write (overwrite), content = `#[vars.blaRidLog as CSV]` — audit artifact mirroring Jewelry's `bla_jobno_map.csv`/Petroleum's `bla_license_map.csv`, naming matches the `blaRidLog` variable.
 3. **Processed file archiving** — File Move `C:\data\BiWeeklyPayroll.csv` → `C:\data\processed\`, done **last** (after both writes above), same reasoning as Jewelry/Petroleum: if the flow errors out partway through, the source file is still in `C:\data\` for investigation/retry rather than already relocated. Only one file to move here (vs. Jewelry/Petroleum's two), since BiWeeklyPayroll has a single source file.
 
@@ -1582,6 +1593,14 @@ Fix — wrap every `contains` expression in its own parens before combining with
 (A contains B) or (C contains D)
 ```
 Found and fixed in `transform-assessment-question-response-biweeklypayroll.dwl` (2026-07-14) — `normalizePaymentMethods`'s `"pay card"`/`"paycard"` check and `getBiweeklySalary`'s pay-period keyword detection (`"week"`/`"biweekly"`, `"year"`/`"annual"`/`"annually"`) both hit this; `normalizeDayValue`'s day-matching `filter` was already written with the parens and didn't need fixing. Same category of DataWeave operator-precedence surprise as the `filter`/`map` gotcha above — worth checking for this pattern (`contains ... or/and ... contains`) in any future ported/translated logic, since it's easy to write unconsciously when porting from a language (like VB) where `Or`/`And` bind differently.
+
+### Timestamped `import_log` filename (all three work units, 2026-07-16)
+`import_log.csv`'s File Write **Path** field (a fixed literal before now) now embeds the write time, so successive runs don't overwrite each other's log. **Correction**: putting the expression directly inline in the Path field (`C:\data\import_log_#[now() as String {format: "yyyyMMdd_HHmm"}].csv`) threw "illegal file path" — the double quotes around the format string collide with the Path field's own attribute-string quoting under the hood. **Working fix**: compute the filename in a separate `Set Variable` first, then reference that variable in the Path field:
+```
+Set Variable: logFilename = #["C:\data\import_log_" ++ (now() as String {format: 'yyyyMMdd_HHmm'}) ++ ".csv"]
+File Write Path: #[vars.logFilename]
+```
+Note the single quotes around `yyyyMMdd_HHmm` inside the Set Variable expression (double quotes there would hit the same collision, just one level removed — single quotes are equally valid DataWeave string delimiters and sidestep it). `HH` (24-hour), not `hh` (12-hour) — `hh` alone has no AM/PM component, so 2pm and 2am would both render `0200`, ambiguous for a log timestamp. Applied to Jewelry's inline `import_log.csv` write (section 2), `CleanupPetroleum`, and `CleanupBiWeeklyPayroll` — same pattern, same reasoning, all three. Studio configuration only (Set Variable + File Write Path), not a `.dwl` transform file.
 
 ### Log payload as JSON
 ```
