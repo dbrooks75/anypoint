@@ -822,7 +822,7 @@ For Each row: (Collection: #[vars.mercStdRows])
                     Otherwise: (skip — ContentNote failed)
             Otherwise: (skip — BLA failed, BL/Assessment/AQR/ContentNote not attempted)
 ```
-**Update (2026-07-14)**: `import_log.csv`/processed-file-archiving now built as a separate **`CleanupPetroleum`** sub-flow, called at the very end of the main flow (after the `For Each` and `AddInvoicesPetroleum` complete) — kept as its own named sub-flow rather than inline steps at the tail of the main flow body, for the same "one responsibility per sub-flow" reasoning as `AddAccount`/`AddContacts`/etc. Contains: File Write `import_log.csv` (`vars.logEntries as CSV`), then File Move `MercStd.csv`/`MercAR.csv`/all 4 truck files → `C:\data\processed\`, done last so a mid-flow error leaves source files in place for retry. **TODO**: Jewelry doesn't have this yet either — retrofit Jewelry with its own `CleanupJewelry` sub-flow (same pattern, `LaborStd.csv`/`LaborAR.csv`) at some point.
+**Update (2026-07-14)**: `import_log.csv`/processed-file-archiving now built as a separate **`CleanupPetroleum`** sub-flow, called at the very end of the main flow (after the `For Each`, `AddInvoicesPetroleum`, **and now `AddSentInvoicePetroleum`** — see below — all complete) — kept as its own named sub-flow rather than inline steps at the tail of the main flow body, for the same "one responsibility per sub-flow" reasoning as `AddAccount`/`AddContacts`/etc. Contains: File Write `import_log.csv` (`vars.logEntries as CSV`), then File Move `MercStd.csv`/`MercAR.csv`/all 4 truck files → `C:\data\processed\`, done last so a mid-flow error leaves source files in place for retry. **TODO**: Jewelry doesn't have this yet either — retrofit Jewelry with its own `CleanupJewelry` sub-flow (same pattern, `LaborStd.csv`/`LaborAR.csv`) at some point.
 
 Right after the main `For Each` completes (same position as Jewelry's `bla_jobno_map.csv` write relative to its `AddInvoices` call), before `Flow Reference: AddInvoicesPetroleum`:
 ```
@@ -869,7 +869,43 @@ For Each (Collection: #[vars.mercArRows]):
             NO_BLA_MATCH pattern as section 3, jobno slot = vars.row.licenseno)
 ```
 
-**Do not carry over `AddSentInvoice`** (section 4) — that's a one-time Jewelry cutover requirement (old-system invoices with no AR payment record), not a general pattern. Strip it, its Flow Reference call, the `blaJobnoLog`-filter-to-Current step, and `transform-sent-invoice.dwl`/`transform-sent-invoiceline.dwl` out of the copied flow.
+**Reversed (2026-07-16): Petroleum does carry over a Sent Invoice cutover flow after all.** Originally decided this was Jewelry-only and stripped out of the copied flow.
+
+### AddSentInvoicePetroleum sub-flow
+
+Licenseno-keyed equivalent of section 4's `AddSentInvoice`, called after `AddInvoicesPetroleum` completes (same ordering constraint as Jewelry — this must be the last invoice created per BLA so the Salesforce trigger marks it "Active"). Field mapping and structure are otherwise identical to Jewelry's — same hardcoded `DueDate__c: 9/30/2026`, `InvoiceDate__c: 8/1/2026`, `InvoiceStatus__c: "Sent"`, no `Payment__c`, same `UnitPrice__c: 120`/`Quantity__c: 1`/`LineType__c: "Base Fee"`/`ProrateFactor__c: 100` InvoiceLine__c — **one rule difference**:
+
+**Skip the Sent invoice entirely if `MercAR` already shows a 2026 `deposit_date` for that `licenseno`** — same "already paid this year" check `transform-bla-petroleum.dwl`'s Status rule uses (a real AR payment already came in, so the cutover placeholder invoice isn't needed). Unlike Jewelry, where every Current-sourced account unconditionally gets a Sent invoice.
+
+New files:
+- **`transform-sent-invoice-filter-petroleum.dwl`** — replaces the plain `sourceFileType == "Current"` filter Jewelry uses inline. Filters `vars.blaLicenseLog` to entries where `sourceFileType == "Current"` **and** no matching `vars.mercArRows` row for that `licenseno` has a `deposit_date` whose year is `2026` (same hardcoded-2026, filter/`sizeOf`-based check as `transform-bla-petroleum.dwl`, wrapped in a local `fun hasCurrentYearDeposit(licenseno)` here since it's applied per log entry rather than once).
+- **`transform-sent-invoice-petroleum.dwl`** — identical field mapping to `transform-sent-invoice.dwl` (reads `vars.row.accountId`/`vars.row.blaId` from the filtered `blaLicenseLog` entry, same as Jewelry reads from `blaJobnoLog`).
+- **`transform-sent-invoiceline-petroleum.dwl`** — identical to `transform-sent-invoiceline.dwl`.
+
+### Flow Structure (`AddSentInvoicePetroleum` sub-flow body)
+Same shape as Jewelry's `AddSentInvoice` (section 4), just the new filter transform in place of the inline `sourceFileType` filter:
+```
+Transform Message (transform-sent-invoice-filter-petroleum.dwl — filters vars.blaLicenseLog to
+  Current-sourced entries with no 2026 deposit_date in vars.mercArRows)
+Set Variable: currentLicenses = payload
+For Each (Collection: #[vars.currentLicenses]):
+    Set Variable: row = #[payload] (row = {licenseno, blaId, accountId, sourceFileType})
+    Transform Message (transform-sent-invoice-petroleum.dwl)
+    Salesforce Create Invoice__c (Records: #[[payload]])
+    Transform Message: extract result (single-item Result & Log Pattern)
+    Set Variable: sentInvoiceResult = payload
+    Set Variable: sentInvoiceId = vars.sentInvoiceResult.id
+    Set Variable: logEntries append (object: "Invoice__c (Sent)", jobno slot = vars.row.licenseno)
+    Choice
+        When #[vars.sentInvoiceId != null]:
+            Transform Message (transform-sent-invoiceline-petroleum.dwl)
+            Salesforce Create InvoiceLine__c (Records: #[[payload]])
+            Transform Message: extract result (single-item pattern)
+            Set Variable: sentInvoiceLineResult = payload
+            Set Variable: logEntries append (object: "InvoiceLine__c (Sent)")
+        Otherwise: (skip — Sent invoice failed, InvoiceLine not attempted)
+```
+Called via Flow Reference right after `AddInvoicesPetroleum` (no input needed — `vars.blaLicenseLog`/`vars.mercArRows` persist as flow variables), and **before** `CleanupPetroleum` — update `CleanupPetroleum`'s trigger condition (see below) to wait for this too, not just `AddInvoicesPetroleum`.
 
 **Vehicles** — there's an additional source file listing vehicles, which adds data to a couple of the Assessment Question Responses. Unlike the Jewelry AQR transform (`transform-assessment-question-response.dwl`), which maps a fixed static list of 7 questions, Petroleum's AQR will need to handle **per-vehicle repetition** for whichever questions the vehicle data feeds — similar in shape to how Contacts handle "up to 4" respparty entries (`transform-contact.dwl`), not a fixed-count list.
 
