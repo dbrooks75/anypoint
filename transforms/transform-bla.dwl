@@ -2,6 +2,22 @@
 output application/java
 
 var jobno = vars.row.jobno default ""
+
+// SiteAddress = the Mailing address, same PO-Box-detection logic as transform-address.dwl's
+// isMailing branch (Jewelry shares the same add1/add2/city/state/zip fields as Petroleum)
+var add1 = vars.row.add1 default ""
+var add2 = vars.row.add2 default ""
+var hasPOBox1 = (lower(add1) replace "." with "") contains "po box"
+var hasPOBox2 = (lower(add2) replace "." with "") contains "po box"
+var bothPopulated = (add1 != "") and (add2 != "")
+
+var mailingStreet =
+    if (bothPopulated and (hasPOBox1 or hasPOBox2))
+        if (hasPOBox1) add1 else add2
+    else if (bothPopulated)
+        add1 ++ " " ++ add2
+    else
+        if (add1 != "") add1 else add2
 ---
 {
     AccountId: vars.accountId,
@@ -14,5 +30,11 @@ var jobno = vars.row.jobno default ""
     Category: "License",
     Trade__c: "Labor Standards",
     LicenseTypeId: vars.licenseTypeId,
-    Description: "Legacy Job Number: " ++ jobno
+    Description: "Legacy Job Number: " ++ jobno,
+    PrimaryOwnerId: vars.contactId,
+    SiteStreet: mailingStreet,
+    SiteCity: vars.row.city default "",
+    SiteStateCode: vars.row.state default "",
+    SitePostalCode: vars.row.zip default "",
+    SiteCountryCode: "US"
 }

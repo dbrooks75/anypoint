@@ -31,5 +31,11 @@ var applicationType =
     Category: "License",
     Trade__c: null,
     LicenseTypeId: vars.licenseTypeId,
-    Description: "Legacy RID: " ++ rid
+    Description: "Legacy RID: " ++ rid,
+    PrimaryOwnerId: vars.contactId,
+    SiteStreet: vars.row.CompanyAddr default "",
+    SiteCity: vars.row.CompanyCity default "",
+    SiteStateCode: vars.row.CompanyState default "",
+    SitePostalCode: vars.row.CompanyZip default "",
+    SiteCountryCode: "US"
 }
