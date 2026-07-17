@@ -15,13 +15,24 @@ var issueDateParsed =
         (issueDate as Date {format: "M/d/yyyy"} as String {format: "yyyy-MM-dd"}) as Date {format: "yyyy-MM-dd"}
     else null
 
-// Expiration Date = 7/31 of the year after license_issued (e.g. license_issued 2026 -> 7/31/2027)
 // PeriodStart = 8/01 of license_issued itself (e.g. license_issued 2026 -> 8/1/2026) - same year, no +1
 // license_issued is an Access-exported numeric year column, strip any trailing ".0" artifact same as other numeric columns
 var licenseIssuedYear = (vars.row.license_issued default "" splitBy ".")[0]
 
+// PeriodEnd/Expiration_Date__c: Current -> 7/31/2027 if a 2026 deposit_date exists in MercAR for
+// this licenseno, else 7/31/2026 (independent of license_issued); Historical -> 7/31 of
+// license_issued + 1 year (unchanged rule)
+var matchingArRows = vars.mercArRows filter (row) -> (row.licenseno default "") == licenseno
+
+var currentYearArRows = matchingArRows filter (row) ->
+    (row.deposit_date default "") != "" and ((row.deposit_date as Date {format: "M/d/yyyy"}) as String {format: "yyyy"}) == "2026"
+
+var hasCurrentYearDeposit = sizeOf(currentYearArRows) > 0
+
 var expirationDateTime =
-    if (licenseIssuedYear != "")
+    if ((vars.row.SourceFileType default "") == "Current")
+        ((if (hasCurrentYearDeposit) "2027" else "2026") ++ "-07-31T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
+    else if (licenseIssuedYear != "")
         (((licenseIssuedYear as Number) + 1) as String {format: "0"} ++ "-07-31T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null
 
