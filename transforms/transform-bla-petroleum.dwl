@@ -41,5 +41,6 @@ var insExpireDateParsed =
     Trade__c: "TBD",
     LicenseTypeId: vars.licenseTypeId,
     Description: "Legacy License Number: " ++ licenseno,
-    Policy_Expiration_Date__c: insExpireDateParsed
+    Policy_Expiration_Date__c: insExpireDateParsed,
+    PrimaryOwnerId: vars.contactId
 }
