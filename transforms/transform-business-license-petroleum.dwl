@@ -56,7 +56,9 @@ var periodStartDate =
     PeriodEnd: expirationDateTime,
     Expiration_Date__c: expirationDateTime,
     RegulatoryAuthorizationTypeId: vars.licenseTypeId,
-    Status: if ((vars.row.SourceFileType default "") == "Current") "Active" else "Inactive",
+    Status: if ((vars.row.SourceFileType default "") == "Current")
+                (if (hasCurrentYearDeposit) "Active" else "Expired")
+            else "Expired",
     Legacy_License_Number__c: licenseno,
     Insurance_Company__c: vars.row.insurance_company,
     Insurance_Policy_Issue_Date__c: issueDateParsed,
