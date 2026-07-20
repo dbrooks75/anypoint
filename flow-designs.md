@@ -30,6 +30,18 @@ Steps 1-4 (manual Excel reheadering) are superseded for LaborStd by the **`Impor
 5. Import the resulting `.csv` into a **`_raw` staging table** (e.g. `LaborStd_raw`), not the final table directly — the final table (e.g. `LaborStd`) has an AutoNumber (counter) primary key field, which a direct import can't populate/reconcile against.
 6. Run an append query to copy rows from the `_raw` staging table into the final table (e.g. `LaborStd_raw` → `LaborStd`), letting Access assign the AutoNumber key as rows are appended.
 
+### Jewelry initial source load — confirmed steps (2026-07-20)
+The client's initial-delivery `.xlsx` files (headered, one per table — see "Incoming leg" above) load **directly** into the four Jewelry Access tables, no `_raw` staging table/append query — unlike steps 5-6 above, which apply to the ongoing `.unl`-based incoming leg, not this one-time initial delivery. Each import lets Access auto-assign the AutoNumber `ID` primary key directly on the real table.
+
+Per-table steps: delete the existing table first (if re-running), save the source `.xlsx` as `.csv` (client requires `.csv`, not `.xlsx`, for security reasons), then import via External Data → New Data Source → From File → Text File — Comma delimited, `"` text qualifier, "First Row Contains Field Names" checked, letting Access create the `ID` primary key. After import, add a `SourceFileType` column by hand in Access for every table (`Current` for `LaborStd`/`LaborAR`, `Historical` for `LaborStdHis`/`LaborARHis`) — same manual-add convention as the general process above.
+
+1. **`LaborStd.xlsx`** (`SourceFileType = "Current"`): delete the existing `LaborStd` table → save as `LaborStd.csv` → import → table `LaborStd`.
+2. **`his_laborSTD.xlsx`** (`SourceFileType = "Historical"`): change the `zip` column to Text type before saving (leading-zero truncation, same risk as the Text-not-Number fields noted above) → save as `LaborStdHis.csv` → import → table `LaborStdHis`.
+3. **`Labor_ar.xlsx`** (`SourceFileType = "Current"`): change `bank_no`, `check_no`, `mo_ord_no` to Text type before saving (same leading-zero/mangling risk) → save as `LaborAr.csv` → import → table `LaborAR`.
+4. **`his_labor_ar.xlsx`** (`SourceFileType = "Historical"`): save as `LaborArHis.csv` → import → table `LaborARHis`.
+
+This is the complete table list for Jewelry's initial source load — no other tables.
+
 ### `ImportSourceData` flow — automated reheadering (LaborStd)
 Reads the two raw pipe-delimited LaborStd files, tags each with the right `SourceFileType`, combines them, and writes one `.csv` — replacing manual steps 1-4 above.
 
@@ -296,7 +308,7 @@ Columns now parse directly into named fields via the CSV header (`header: true`)
 | 24 | title3 | → Contact 3 Title |
 | 25 | respparty4 | → Contact 4 |
 | 26 | title4 | → Contact 4 Title |
-| 27 | jobno | |
+| 27 | jobno | Text (2026-07-20 — was Number), starts with `"CS-"` for Jewelry |
 | 28 | issue_date | |
 | 29 | tot_pymt | |
 | 30 | batchid | |
@@ -358,10 +370,10 @@ Sub-flow boundaries noted inline — see Sub-Flow Architecture above for what ea
 ```
 On New or Updated File (C:\data\, LoadReadyFlag.csv)
   → File Read: C:\data\LaborStd.csv
-  → Transform Message (transform1-filter-and-name.dwl — operates directly on payload straight from the Read, no intermediate raw variable; CSV → Java, header: true; filters invalid rows and cleans jobno, columns already named from header)
+  → Transform Message (transform1-filter-and-name.dwl — operates directly on payload straight from the Read, no intermediate raw variable; CSV → Java, header: true; filters to rows where jobno starts with "CS-", columns already named from header)
   → Set Variable: laborStdRows = #[payload]
   → File Read: C:\data\LaborAR.csv
-  → Transform Message (transform-ar-filter-and-name.dwl — operates directly on payload straight from the Read, no intermediate raw variable, same pattern as LaborStd.csv above; filters invalid rows, cleans jobno, sorts by deposit_date ascending)
+  → Transform Message (transform-ar-filter-and-name.dwl — operates directly on payload straight from the Read, no intermediate raw variable, same pattern as LaborStd.csv above; filters to rows where jobno starts with "CS-", sorts by deposit_date ascending)
   → Set Variable: arRows = #[payload] (reused by both AddAccount, per-row filtered by jobno, and AddInvoices, iterated whole — parsing once here instead of twice)
   → Flow Reference: InitAssessmentQuestionVersion (runs once — sets vars.aqvMap)
   → Flow Reference: InitAccountRecordType (runs once — sets vars.accountRecordTypeId)
@@ -453,7 +465,7 @@ The Invoice Load (below) references `vars.blaJobnoLog` directly and joins on job
 - **Go back and apply the Result & Log Pattern to the other subflows in Studio** — `AddInvoices` is getting it built-in now; `AddAccount`, `AddLocationsAndAddresses`, `AddContacts`, `AddBusinessLicenseApp` were built earlier and need to be revisited to confirm every Salesforce Create in them actually has the extract-result + `logEntries` append steps wired up, matching what's documented in Flow Structure above (design is correct in the doc — needs verifying against the actual Studio build).
 - Build the Invoice Load Flow (see below) using `vars.blaJobnoLog` (in-memory, same flow execution — see Trigger File section above)
 - **Interim reconciliation logging (current plan)**: write `import_log.csv` via the Result & Log Pattern (see above), then import into the Postgres `import_log` table using pgAdmin's **Import/Export Data** tool (right-click table → Import, point at the CSV, header: yes, map columns to jobno/object/status/salesforce_id/error_code/error_message, leave id/logged_at unmapped). This works entirely through pgAdmin's existing connection — no Mule Database connector or JDBC driver required, so it's unaffected by the Maven/PKIX blocker below.
-- **Build a `CleanupJewelry` sub-flow** (2026-07-14) — Petroleum and BiWeeklyPayroll both now have their own dedicated cleanup sub-flow (`CleanupPetroleum`/`CleanupBiWeeklyPayroll`: `import_log.csv` write, BLA-log audit write, processed-file archiving, called at the very end of the main flow). Jewelry still does this inline/not-at-all — retrofit it to match once the other two are confirmed working, so all three work units follow the same convention.
+- ~~Build a `CleanupJewelry` sub-flow~~ — done (2026-07-20). All three work units now follow the same convention: `CleanupJewelry`/`CleanupPetroleum`/`CleanupBiWeeklyPayroll`.
 - PostgreSQL reconciliation logging **directly from the Mule flow** — **blocked**: Maven can't resolve `org.postgresql:postgresql:42.7.3` (`PKIX path building failed` — the sandbox's TLS-intercepting proxy isn't trusted by Java's cacerts). Fix requires importing the corporate root CA into the JDK Studio bundles, which needs admin rights. Checking with IT. Revisit once unblocked — would replace the CSV/pgAdmin-import step above with direct Database Insert per log entry.
   - Add Database connector from Exchange to project
   - Add PostgreSQL JDBC driver to pom.xml (`org.postgresql:postgresql:42.7.3`)
@@ -490,7 +502,9 @@ Invoices load oldest-first, sorted by `deposit_date` (not the pymt_type-derived 
 
 **Output type — `Date`, not `String`.** `DueDate__c`/`InvoiceDate__c`/`PaymentDate__c`/`ReceiptDate__c` are Salesforce **Date** fields, and the connector rejects a `String` even when it's valid ISO format (`"2016-08-23"`) — confirmed via a real error: `value not of required type: 2016-08-23`. Fix: stop at `... as Date {format: "M/d/yyyy"}` and do **not** chain a further `as String {format: "yyyy-MM-dd"}` — leave the value as DataWeave's `Date` type and let the connector serialize it. This is different from the DateTime fields elsewhere in the project (BLA's `AppliedDate`, Assessment's `EffectiveDateTime`), which need a full ISO8601 `String` with a time/timezone component, not a bare `Date`.
 
-**Recurring pattern — Access numeric columns export with a trailing `.00`.** Same root cause as the `jobno` decimal artifact (`transform1-filter-and-name.dwl`/`transform-ar-filter-and-name.dwl`), hit a second time on `Payment__c.ReferenceNumber__c` (sourced from `cash_recpt_no`/`mo_ord_no`, both Access numeric columns). Fix is the same each time: `(value default "" splitBy ".")[0]` to strip everything after the decimal point. Check any *other* field sourced from a numeric-typed Access column for this before assuming it's clean — it's cheap to apply defensively even where it turns out to be a no-op.
+**Recurring pattern — Access numeric columns export with a trailing `.00`.** Originally hit on the `jobno` decimal artifact (`transform1-filter-and-name.dwl`/`transform-ar-filter-and-name.dwl` — no longer applicable now that `jobno` is a Text field, see below), hit a second time on `Payment__c.ReferenceNumber__c` (sourced from `cash_recpt_no`/`mo_ord_no`, both Access numeric columns). Fix is the same each time: `(value default "" splitBy ".")[0]` to strip everything after the decimal point. Check any *other* field sourced from a numeric-typed Access column for this before assuming it's clean — it's cheap to apply defensively even where it turns out to be a no-op.
+
+**`jobno` is now a Text field, not Number (2026-07-20)** — incoming data changed; for Jewelry every `jobno` starts with `"CS-"`, no other filter needed. `transform1-filter-and-name.dwl`/`transform-ar-filter-and-name.dwl` updated: filter is now `(row.jobno default "") matches /^CS-.+/` (was the numeric-positive-integer regex against a `.`-stripped value), and the `.`-stripping map/reassignment of `jobno` was dropped entirely since there's no more decimal-export artifact to clean on a Text column. **Confirmed (2026-07-20)**: `transform-bla.dwl`'s `ApplicationType: if (jobno[-2 to -1] == "01") "New" else "Renewal"` needs no change — the last-2-digit convention is unchanged, just now prefixed with `"CS-"` instead of being a bare number, and slicing the last 2 characters of the string works the same either way.
 
 ### Field Mapping
 
@@ -560,7 +574,7 @@ Columns parse directly into named fields via the CSV header (`header: true`) —
 
 | Index | Column | Notes |
 |---|---|---|
-| 0 | jobno | Same data type/format as labor_std.csv — join key to `vars.blaJobnoLog` (in-memory) |
+| 0 | jobno | Same data type/format as labor_std.csv (Text, starts with `"CS-"` for Jewelry) — join key to `vars.blaJobnoLog` (in-memory) |
 | 1 | appnumb | number |
 | 2 | pymt_code | text |
 | 3 | pymt_code_amt | number — used for InvoiceLine__c.UnitPrice__c and Payment__c.Amount__c |
@@ -854,7 +868,7 @@ For Each row: (Collection: #[vars.mercStdRows])
                     Otherwise: (skip — ContentNote failed)
             Otherwise: (skip — BLA failed, BL/Assessment/AQR/ContentNote not attempted)
 ```
-**Update (2026-07-14)**: `import_log.csv`/processed-file-archiving now built as a separate **`CleanupPetroleum`** sub-flow, called at the very end of the main flow (after the `For Each`, `AddInvoicesPetroleum`, **and now `AddSentInvoicePetroleum`** — see below — all complete) — kept as its own named sub-flow rather than inline steps at the tail of the main flow body, for the same "one responsibility per sub-flow" reasoning as `AddAccount`/`AddContacts`/etc. Contains: Set Variable `logFilename` (built once, timestamped — see note below), then File Write `#[vars.logFilename]` (`vars.logEntries as CSV`), then File Move `MercStd.csv`/`MercAR.csv`/all 4 truck files → `C:\data\processed\`, done last so a mid-flow error leaves source files in place for retry. **TODO**: Jewelry doesn't have this yet either — retrofit Jewelry with its own `CleanupJewelry` sub-flow (same pattern, `LaborStd.csv`/`LaborAR.csv`) at some point.
+**Update (2026-07-14)**: `import_log.csv`/processed-file-archiving now built as a separate **`CleanupPetroleum`** sub-flow, called at the very end of the main flow (after the `For Each`, `AddInvoicesPetroleum`, **and now `AddSentInvoicePetroleum`** — see below — all complete) — kept as its own named sub-flow rather than inline steps at the tail of the main flow body, for the same "one responsibility per sub-flow" reasoning as `AddAccount`/`AddContacts`/etc. Contains: Set Variable `logFilename` (built once, timestamped — see note below), then File Write `#[vars.logFilename]` (`vars.logEntries as CSV`), then File Move `MercStd.csv`/`MercAR.csv`/all 4 truck files → `C:\data\processed\`, done last so a mid-flow error leaves source files in place for retry. ~~**TODO**: Jewelry doesn't have this yet either~~ — done (2026-07-20): Jewelry now has its own `CleanupJewelry` sub-flow, same pattern (`LaborStd.csv`/`LaborAR.csv` archiving).
 
 Right after the main `For Each` completes (same position as Jewelry's `bla_jobno_map.csv` write relative to its `AddInvoices` call), before `Flow Reference: AddInvoicesPetroleum`:
 ```
@@ -1578,8 +1592,6 @@ Following the same "separate named sub-flow" pattern just established for Petrol
 2. **`bla_rid_map.csv`** — File Write (overwrite), content = `#[vars.blaRidLog as CSV]` — audit artifact mirroring Jewelry's `bla_jobno_map.csv`/Petroleum's `bla_license_map.csv`, naming matches the `blaRidLog` variable.
 3. **Processed file archiving** — File Move `C:\data\BiWeeklyPayroll.csv` → `C:\data\processed\`, done **last** (after both writes above), same reasoning as Jewelry/Petroleum: if the flow errors out partway through, the source file is still in `C:\data\` for investigation/retry rather than already relocated. Only one file to move here (vs. Jewelry/Petroleum's two), since BiWeeklyPayroll has a single source file.
 
-**TODO (cross-work-unit)**: Jewelry still doesn't have its own cleanup sub-flow either — retrofit it with a `CleanupJewelry` sub-flow (same pattern: `import_log.csv` write, `LaborStd.csv`/`LaborAR.csv` archiving) once Petroleum's and BiWeeklyPayroll's are both confirmed working, so all three work units follow the same convention.
-
 **TODO (cross-work-unit, not yet implemented, 2026-07-16)**: flush `vars.logEntries` to a file on an unhandled exception, so a mid-run crash doesn't lose whatever log entries had already accumulated. Currently `import_log.csv` is only written once, at the very end, inside each work unit's Cleanup sub-flow (`CleanupPetroleum`/`CleanupBiWeeklyPayroll`, see above) — if the flow throws before reaching that point, everything in `vars.logEntries` up to the failure is lost, even though the Result & Log Pattern already captured it in memory. Proposed approach: add an **On Error Propagate** error handler at each main flow's top level (not per sub-flow — sub-flow errors already propagate up to the caller by default) containing a File Write of `#[vars.logEntries as CSV]` to a **distinct** filename (e.g. `import_log_error.csv`, not `import_log.csv`) so a partial error-path dump is never confused with, or overwritten by, a real completed run's log. On Error Propagate (not On Error Continue) keeps the flow actually failing/visible in Studio/Monitoring — this only adds a "dump what we have on the way out" step. Only helps for genuine unhandled exceptions (DataWeave coercion errors, lost connections, etc.) — the everyday per-record Salesforce validation failure already doesn't throw at all, which is why the Result & Log Pattern logs explicitly after every Create instead of relying on try/catch.
 
 ### Open questions
@@ -1587,6 +1599,50 @@ Following the same "separate named sub-flow" pattern just established for Petrol
 - Does Account_Status__c still apply the same way, and what's the precedence across `DateRecd/DateApproved/DateDenied/DateExpired/DateRevoked` for deriving status? Needs a real answer now that the file's grain is confirmed one-row-per-job.
 - ~~Does BiWeeklyPayroll need the Sent Invoice cutover logic (`AddSentInvoice`, section 4)?~~ — moot, confirmed no Invoice/Payment loading at all for this unit.
 - ~~Does BiWeeklyPayroll need its own `InitAccountRecordType` sub-flow (query-based, like Petroleum) or will it hardcode `RecordTypeId` like Jewelry currently does?~~ — resolved: query-based `InitAccountRecordTypeBiWeeklyPayroll`, confirmed working in Studio.
+
+---
+
+## 8. Environment Configuration (Salesforce Connector) — Planned, 2026-07-20
+
+**Goal**: switching sandboxes (`ridlt--dp02` ↔ `ridlt--dp04`, etc.) should require editing exactly **one** thing, never a per-flow-file connector config and never any individual Query/Create/Delete/Update operation. Two configs with different names doesn't achieve this — every connector operation's `config-ref` would need repointing, which is exactly the pain being designed away here. The fix is one config **name**, whose field values come from an external properties file that gets swapped instead.
+
+### Step 1 — Consolidate to one true global config per project (prerequisite)
+Per the connectivity notes, each flow file (`Jewelry.xml`, `Petroleum.xml`, `RemoveAccounts.xml`, etc.) currently has its **own separately-declared** `Salesforce_Config` element — they only look shared because they share a name. Editing one doesn't update the others (confirmed repeatedly — see connectivity memory items 5–6). Before placeholders help at all, this duplication has to go:
+1. Pick one flow file's config as the canonical one (or create a fresh global element in a new `global.xml`/`global-config.xml` file added to the project).
+2. In every other flow file, delete that file's own duplicate config element, then re-point every Salesforce connector operation in that file to reference the canonical config (Connector configuration dropdown → select the surviving one).
+3. Confirm via Global Elements: with the fix in place, the tab should show **one** `Salesforce_Config` regardless of which flow file tab is active (previously it appeared empty/inconsistent depending on the active file — see connectivity item 6).
+
+This step alone (even without placeholders) already fixes the "have to update the token in 3 places" problem.
+
+### Step 2 — Externalize credentials to a properties file
+Once there's one real config, change its fields from literal values to placeholders:
+- Username: `${sfdc.username}`
+- Password: `${sfdc.password}`
+- Security Token: `${sfdc.securityToken}`
+- Authorization URL: `${sfdc.url}`
+
+Add a **Configuration Properties** global element (Global Elements → Create → General → Configuration properties) pointing at a properties/YAML file, e.g. `src/main/resources/sandbox.yaml`:
+```yaml
+sfdc:
+  username: "andrew.brooks.vdr@dlt.ri.gov.dp04"
+  password: "<current sandbox password>"
+  securityToken: "<current token>"
+  url: "https://ridlt--dp04.sandbox.my.salesforce.com"
+  sandboxName: "dp04"
+  userName: "Andrew"
+```
+Switching environments is now: edit the values in `sandbox.yaml` and save. No XML touched, no connector operation touched, no per-flow-file duplication to chase.
+
+### Step 3 — Tie the `import_log.csv` fields to the same file
+The `SandboxName`/`SFUserName` columns added earlier (see `SandboxName`/`SFUserName`/`WorkUnit` columns section below) are currently hardcoded literals in each Cleanup sub-flow's File Write Content expression. Once Step 2 is in place, swap the literals for the same placeholders so one file edit updates credentials *and* log output together:
+```
+#[(vars.logEntries map (e) -> e ++ {SandboxName: p('sfdc.sandboxName'), SFUserName: p('sfdc.userName'), WorkUnit: "Jewelry"}) as CSV]
+```
+(`p(...)` is DataWeave's function for reading a Configuration Properties value by key — `WorkUnit` stays a literal since it's per-flow, not per-environment.)
+
+### Notes / open questions
+- This only reduces the per-environment change to one file if each work unit (Jewelry/Petroleum/BiWeeklyPayroll/RemoveAccounts) is its own separate Studio project — confirm whether `sandbox.yaml` needs to be duplicated once per project or can be shared. If these are genuinely separate deployable Mule apps (not just separate flow files in one app), each project needs its own copy of the properties file, updated in parallel — still far less error-prone than hunting per-connector-operation configs.
+- Not yet applied in Studio — this is a design writeup only, pending confirmation before making the change (Step 1's config deletion/re-pointing is the riskiest part, since deleting the wrong config or missing an operation reference could break a working flow).
 
 ---
 
@@ -1638,6 +1694,22 @@ Set Variable: logFilename = #["C:\data\import_log_" ++ (now() as String {format:
 File Write Path: #[vars.logFilename]
 ```
 Note the single quotes around `yyyyMMdd_HHmm` inside the Set Variable expression (double quotes there would hit the same collision, just one level removed — single quotes are equally valid DataWeave string delimiters and sidestep it). `HH` (24-hour), not `hh` (12-hour) — `hh` alone has no AM/PM component, so 2pm and 2am would both render `0200`, ambiguous for a log timestamp. Applied to Jewelry's inline `import_log.csv` write (section 2), `CleanupPetroleum`, and `CleanupBiWeeklyPayroll` — same pattern, same reasoning, all three. Studio configuration only (Set Variable + File Write Path), not a `.dwl` transform file.
+
+### `SandboxName`/`SFUserName`/`WorkUnit` columns on `import_log.csv` (all three work units, 2026-07-20)
+Added to identify which sandbox/user/work unit a given log file came from, now that testing moves between sandboxes (`ridlt--dp02` → `ridlt--dp04`, see connectivity notes) and all three work units share the same `import_log.csv` naming convention. Appended at the File Write step itself (not threaded through `vars.logEntries` at append time), so it's a one-line change to the existing Content field rather than touching every `Result & Log Pattern` append across the flow. `SandboxName`/`SFUserName` are the same literal across all three flows; `WorkUnit` differs per flow:
+
+```
+# CleanupJewelry
+#[(vars.logEntries map (e) -> e ++ {SandboxName: "dp04", SFUserName: "Andrew", WorkUnit: "Jewelry"}) as CSV]
+
+# CleanupPetroleum
+#[(vars.logEntries map (e) -> e ++ {SandboxName: "dp04", SFUserName: "Andrew", WorkUnit: "Petroleum"}) as CSV]
+
+# CleanupBiWeeklyPayroll
+#[(vars.logEntries map (e) -> e ++ {SandboxName: "dp04", SFUserName: "Andrew", WorkUnit: "BiWeeklyPayroll"}) as CSV]
+```
+
+Column order becomes `..., error_message, SandboxName, SFUserName, WorkUnit` (appended at the end, after the existing Jewelry/Petroleum/BiWeeklyPayroll columns). Values are hardcoded literals for now, not read from the connector config or flow name — update `SandboxName`/`SFUserName` by hand in each Cleanup File Write's Content field when the sandbox/user changes. Applies to Jewelry's `CleanupJewelry` sub-flow, `CleanupPetroleum`, and `CleanupBiWeeklyPayroll` — same three locations as the timestamped-filename fix above.
 
 ### Log payload as JSON
 ```

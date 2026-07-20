@@ -1,5 +1,5 @@
 %dw 2.0
 output application/java
 ---
-(payload filter (row) -> ((row.jobno default "") splitBy "." )[0] matches /^[1-9]\d*$/)
-  map (row) -> (row - "ID") ++ { id: row.ID, jobno: (row.jobno default "" splitBy ".")[0] }
+(payload filter (row) -> (row.jobno default "") matches /^CS-.+/)
+  map (row) -> (row - "ID") ++ { id: row.ID }
