@@ -4,11 +4,11 @@ output application/java
 var jobno = vars.row.jobno default ""
 var issueDate = vars.row.issue_date default ""
 
-var issueDateParsed = issueDate as Date {format: "MM/dd/yyyy"}
+var issueDateParsed = issueDate as Date {format: "M/d/yyyy"}
 
 var issueDateTime =
     if (issueDate != "")
-        ((issueDate as Date {format: "MM/dd/yyyy"} as String {format: "yyyy-MM-dd"}) ++ "T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
+        ((issueDate as Date {format: "M/d/yyyy"} as String {format: "yyyy-MM-dd"}) ++ "T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null
 
 var firstOfMonth = (issueDateParsed as String {format: "yyyy-MM"} ++ "-01") as Date {format: "yyyy-MM-dd"}
