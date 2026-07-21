@@ -1576,6 +1576,31 @@ On New or Updated File (C:\data\, LoadReadyFlagBiWeeklyPayroll.csv)
           → Salesforce Create Account (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
               object: "Account", keyed by vars.row.RID instead of jobno/licenseno]
           → Set Variable: accountId = vars.accountResult.id
+          → Choice
+              When #[vars.accountId != null]:
+                  → Transform Message (transform-account-status-biweeklypayroll.dwl)
+                  → Salesforce Create Account_Status__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "Account_Status__c"]
+              Otherwise: (skip — Account failed, Account_Status__c not attempted)
+```
+
+### Account Status (`transform-account-status-biweeklypayroll.dwl`, resolved 2026-07-21)
+No `arRows`/history-style join needed here (unlike Jewelry/Petroleum) — this work unit has no AR/invoice data at all, and the source file is already one-row-per-job, so `Effective_Date__c` reads straight off the current row instead of filtering/sorting a separate collection.
+
+| Field | Source |
+|---|---|
+| Account__c | `vars.accountId` |
+| Effective_Date__c | `vars.row.DateRecd`, parsed `Date {format: "M/d/yyyy"}` (confirmed Short Text/non-padded, same as the rest of this work unit's status-shaped dates — see section 3's Date Format note); `null` if blank |
+| Status__c | hardcoded `"Active"` for all — same as Jewelry/Petroleum, no derivation from `DateDenied`/`DateRevoked`/`DateExpired` |
+
+```
+%dw 2.0
+output application/java
+---
+{
+    Account__c: vars.accountId,
+    Effective_Date__c: if ((vars.row.DateRecd default "") != "") vars.row.DateRecd as Date {format: "M/d/yyyy"} else null,
+    Status__c: "Active"
+}
 ```
 
 **`InitAccountRecordTypeBiWeeklyPayroll` sub-flow body** (same query as Petroleum's, see the Account field mapping section above):
@@ -1588,9 +1613,9 @@ Set Variable: accountRecordTypeId = #[payload[0].Id]
 
 **Confirmed working in Studio (2026-07-14)**: `AddContactsBiWeeklyPayroll` (Contact create, 0-2 per row) tested successfully. `AddBusinessLicenseAppBiWeeklyPayroll` (BLA → BusinessLicense) also confirmed working. `InitAssessmentQuestionVersionBiWeeklyPayroll` → Assessment → all 13 AssessmentQuestionResponse questions now confirmed working end to end too, after resolving the `Name`-matching bugs above.
 
-**Main per-row chain now fully confirmed working end to end**: Account → Account_Status__c (still deferred, see below) → Location → Address__c → PartyAddress__c → Contact → BLA → BusinessLicense → Assessment → AQR (all 13 questions).
+**Main per-row chain now fully confirmed working end to end**: Account → Account_Status__c → Location → Address__c → PartyAddress__c → Contact → BLA → BusinessLicense → Assessment → AQR (all 13 questions).
 
-**Not yet wired/resolved**: Account_Status__c nested inside `AddAccount` (deferred — its date-precedence logic isn't decided yet, see Open Questions), and the Note object (details still deferred by the user until everything else is done). These are the only two things left in this work unit.
+**Not yet wired**: Account_Status__c design resolved 2026-07-21 (`Effective_Date__c` ← `DateRecd`, `Status__c` hardcoded `"Active"` — see "Account Status" above) but not yet built/tested in Studio. The Note object (details still deferred by the user until everything else is done) is the only other thing left in this work unit.
 
 ### Cleanup: `CleanupBiWeeklyPayroll` sub-flow (confirmed working in Studio, 2026-07-14)
 Following the same "separate named sub-flow" pattern just established for Petroleum's `CleanupPetroleum` (rather than inline steps at the tail of the main flow body) — called at the very end of the main flow, after the `For Each` completes:
@@ -1599,11 +1624,13 @@ Following the same "separate named sub-flow" pattern just established for Petrol
 2. **`bla_rid_map.csv`** — File Write (overwrite), content = `#[vars.blaRidLog as CSV]` — audit artifact mirroring Jewelry's `bla_jobno_map.csv`/Petroleum's `bla_license_map.csv`, naming matches the `blaRidLog` variable.
 3. **Processed file archiving** — File Move `C:\data\BiWeeklyPayroll.csv` → `C:\data\processed\`, done **last** (after both writes above), same reasoning as Jewelry/Petroleum: if the flow errors out partway through, the source file is still in `C:\data\` for investigation/retry rather than already relocated. Only one file to move here (vs. Jewelry/Petroleum's two), since BiWeeklyPayroll has a single source file.
 
+**TODO (cross-work-unit, not yet implemented, 2026-07-21)**: every DateTime field built via the `(dateString ++ "T00:00:00Z") as DateTime {...}` pattern anchors at **midnight UTC**, which can display as the **previous calendar day** for any viewer/org timezone behind UTC — Salesforce DateTime fields are stored UTC and rendered in the viewer's timezone. Surfaced by the `AppliedDate: |1900-01-01T00:00:00Z|` placeholder in `transform-bla.dwl`/`transform-bla-petroleum.dwl` showing as `12/31/1899` in the app (an 8-hour-behind timezone rolling midnight UTC back a day) — but the same mechanism applies to every real-date DateTime field built this way too (`Issue_Date__c`, `PeriodStart`/`PeriodEnd`, `EffectiveDateTime`, `Effective_From__c`, etc. across all three work units, 12 files total: `transform-bla*.dwl`, `transform-business-license*.dwl`, `transform-assessment*.dwl`, `transform-partyaddress*.dwl`), just less noticeable since a real date shifting back one day still looks like a plausible date. Proposed fix: anchor at **noon UTC** (`T12:00:00Z`) instead of midnight — safe for any timezone offset within ±12 hours, which covers every US timezone. **Not yet applied — revisit later**, scope (all 12 files vs. just the 1900 placeholder) still to be decided.
+
 **TODO (cross-work-unit, not yet implemented, 2026-07-16)**: flush `vars.logEntries` to a file on an unhandled exception, so a mid-run crash doesn't lose whatever log entries had already accumulated. Currently `import_log.csv` is only written once, at the very end, inside each work unit's Cleanup sub-flow (`CleanupPetroleum`/`CleanupBiWeeklyPayroll`, see above) — if the flow throws before reaching that point, everything in `vars.logEntries` up to the failure is lost, even though the Result & Log Pattern already captured it in memory. Proposed approach: add an **On Error Propagate** error handler at each main flow's top level (not per sub-flow — sub-flow errors already propagate up to the caller by default) containing a File Write of `#[vars.logEntries as CSV]` to a **distinct** filename (e.g. `import_log_error.csv`, not `import_log.csv`) so a partial error-path dump is never confused with, or overwritten by, a real completed run's log. On Error Propagate (not On Error Continue) keeps the flow actually failing/visible in Studio/Monitoring — this only adds a "dump what we have on the way out" step. Only helps for genuine unhandled exceptions (DataWeave coercion errors, lost connections, etc.) — the everyday per-record Salesforce validation failure already doesn't throw at all, which is why the Result & Log Pattern logs explicitly after every Create instead of relying on try/catch.
 
 ### Open questions
 - All the "not yet mapped" items above — need per-field Salesforce mapping decisions before transforms can be written.
-- Does Account_Status__c still apply the same way, and what's the precedence across `DateRecd/DateApproved/DateDenied/DateExpired/DateRevoked` for deriving status? Needs a real answer now that the file's grain is confirmed one-row-per-job.
+- ~~Does Account_Status__c still apply the same way, and what's the precedence across `DateRecd/DateApproved/DateDenied/DateExpired/DateRevoked` for deriving status?~~ — resolved 2026-07-21: `Effective_Date__c` ← `DateRecd` (no AR/history join needed, unlike Jewelry/Petroleum — there's no invoice data in this work unit at all), `Status__c` hardcoded `"Active"`, same as Jewelry/Petroleum. See "Account Status" above.
 - ~~Does BiWeeklyPayroll need the Sent Invoice cutover logic (`AddSentInvoice`, section 4)?~~ — moot, confirmed no Invoice/Payment loading at all for this unit.
 - ~~Does BiWeeklyPayroll need its own `InitAccountRecordType` sub-flow (query-based, like Petroleum) or will it hardcode `RecordTypeId` like Jewelry currently does?~~ — resolved: query-based `InitAccountRecordTypeBiWeeklyPayroll`, confirmed working in Studio.
 
