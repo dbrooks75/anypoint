@@ -124,11 +124,11 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
           → Set Variable (invoiceId)
           → Salesforce Query: SELECT Id FROM Payment__c WHERE Invoice__c = :invoiceId
               (Parameters: #[{invoiceId: vars.invoiceId}])
-          → Salesforce Delete (Payment__c)
+          → Salesforce Delete (Payment__c) → [Delete Result & Log Pattern → logEntries, object: "Payment__c"]
           → Salesforce Query: SELECT Id FROM InvoiceLine__c WHERE Invoice__c = :invoiceId
               (Parameters: #[{invoiceId: vars.invoiceId}])
-          → Salesforce Delete (InvoiceLine__c)
-          → Salesforce Delete (Invoice__c)
+          → Salesforce Delete (InvoiceLine__c) → [Delete Result & Log Pattern → logEntries, object: "InvoiceLine__c"]
+          → Salesforce Delete (Invoice__c) → [Delete Result & Log Pattern → logEntries, object: "Invoice__c"]
       → Salesforce Query: SELECT Id FROM Business_License_Application__c WHERE Account__c = :accountId
           (Parameters: #[{accountId: vars.accountId}])
       → For Each (loop over BLAs — this loop already existed, with its own
@@ -137,9 +137,29 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
           → Set Variable (blaId)
           → Salesforce Query: SELECT ContentDocumentId FROM ContentDocumentLink WHERE LinkedEntityId = :blaId
               (Parameters: #[{blaId: vars.blaId}])
-          → Salesforce Delete (ContentNote, Ids = extracted ContentDocumentId list — see note below)
-          → Salesforce Delete (Business_License_Application__c) (pre-existing step)
-  → Logger
+          → Salesforce Delete (ContentNote, Ids = extracted ContentDocumentId list — see note below) → [Delete Result & Log Pattern → logEntries, object: "ContentNote"]
+          → Salesforce Delete (Business_License_Application__c) (pre-existing step) → [Delete Result & Log Pattern → logEntries, object: "Business_License_Application__c"]
+      → Salesforce Query: SELECT Id, AddressId__c FROM PartyAddress__c WHERE PartyId = :accountId
+          (Parameters: #[{accountId: vars.accountId}]) → Set Variable: partyAddressIds, addressIds
+      → Salesforce Query: SELECT ParentId FROM Address__c WHERE Id IN (:addressIds)
+          (Parameters: #[{addressIds: vars.addressIds}]) → Set Variable: locationIds
+      → Salesforce Delete (PartyAddress__c, Ids = vars.partyAddressIds) → [Delete Result & Log Pattern → logEntries, object: "PartyAddress__c"]
+      → Salesforce Delete (Address__c, Ids = vars.addressIds) → [Delete Result & Log Pattern → logEntries, object: "Address__c"]
+      → Salesforce Delete (Location, Ids = vars.locationIds) → [Delete Result & Log Pattern → logEntries, object: "Location"]
+      → Salesforce Delete (Account_Status__c) → [Delete Result & Log Pattern → logEntries, object: "Account_Status__c"]
+      → Salesforce Delete (Entity_Identifier__c) → [Delete Result & Log Pattern → logEntries, object: "Entity_Identifier__c"]
+  → Choice
+      When #[sizeOf(vars.logEntries default []) > 0]:
+          → Set Variable: logFilename = #["C:\data\delete_log_" ++ (now() as String {format: 'yyyyMMdd_HHmm'}) ++ ".csv"]
+          → File Write: #[vars.logFilename] (overwrite, content — File Write's Content field accepts a full multiline script, so this is written as:
+              ```
+              %dw 2.0
+              output application/csv quoteValues=true
+              ---
+              vars.logEntries
+              ```
+              rather than the single-line `as CSV {quoteValues: true}` coercion — same result, different syntax for the writer property (`quoteValues=true` in the `output` directive vs. `{quoteValues: true}` as an inline object literal))
+      Otherwise: (skip — nothing was deleted, no log to write)
 ```
 
 ### Delete Order (Important — children must be deleted before parents)
@@ -148,11 +168,53 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
 3. Invoice__c
 4. **ContentNote** (new, 2026-07-16, Petroleum only so far — see note below) — looked up via `ContentDocumentLink.LinkedEntityId = blaId`, not `Account__c` directly. **Correction**: the delete flow already had a `Business_License_Application__c WHERE Account__c = :accountId` query and a per-BLA delete loop before this — the new ContentNote steps just slot into that existing loop (before the existing BLA delete), not a brand-new lookup as originally assumed here.
 5. Business_License_Application__c (pre-existing, already handled — not a gap as previously assumed in this doc)
-6. Address__c (child of Location via Address__c.ParentId)
-7. Location (TODO: add to delete flow)
-8. Account_Status__c (child of Account via Account_Status__c.Account__c) — added to delete flow
-9. Entity_Identifier__c (child of Account) — added to delete flow. Not created by the Mule load flow at all — it's auto-created by a Salesforce trigger (off Account creation, presumably), so it never appeared anywhere in the load design, but still needs cleanup on delete since it's still a real child record of Account
-10. (Account deletion TBD)
+6. **PartyAddress__c** (undocumented until now — already built in Studio) — child of both Account (`PartyId`) and Address__c (`AddressId__c`). Query: `SELECT Id, AddressId__c FROM PartyAddress__c WHERE PartyId = :accountId` → `Set Variable: partyAddressIds` (extracted `Id` list), `Set Variable: addressIds` (extracted `AddressId__c` list). Deleted right before Address__c.
+7. Address__c (child of Location via Address__c.ParentId) — `Salesforce Delete (Address__c, Ids = vars.addressIds)`, using the `addressIds` captured in step 6.
+8. **Location** (resolved 2026-07-22, previously TODO) — Location has **no field pointing back to Account at all**; the only path is `Address__c.ParentId`, which is only readable *before* Address__c is deleted. So the lookup has to happen right after step 6's query, ahead of the Address__c/PartyAddress__c deletes:
+   - Insert **between** step 6's query and the PartyAddress__c/Address__c deletes: `Salesforce Query: SELECT ParentId FROM Address__c WHERE Id IN (:addressIds)` (Parameters: `#[{addressIds: vars.addressIds}]`) → Transform Message: extract `ParentId` list → `Set Variable: locationIds`
+   - Then, after Address__c is deleted (step 7): `Salesforce Delete (Location, Ids = vars.locationIds)`
+   - Untested so far: this is the first place in the project binding a **list** into a SOQL `IN (...)` clause rather than a single scalar Id — the Key Notes above only cover single-value bind parameters not auto-quoting. Confirm the connector formats a bound List correctly for `IN (...)` before trusting this on a real delete run (test on a BiWeeklyPayroll account first — always exactly 2 Locations/Addresses, a reliable multi-value case).
+9. Account_Status__c (child of Account via Account_Status__c.Account__c) — added to delete flow
+10. Entity_Identifier__c (child of Account) — added to delete flow. Not created by the Mule load flow at all — it's auto-created by a Salesforce trigger (off Account creation, presumably), so it never appeared anywhere in the load design, but still needs cleanup on delete since it's still a real child record of Account
+11. (Account deletion TBD)
+
+### Delete Result & Log Pattern (added 2026-07-22, apply after every Salesforce Delete above)
+Mirrors section 2's Create-side Result & Log Pattern, but Delete's connector response shape was confirmed empirically first rather than assumed — verified in Studio (`Logger: #[payload]` on a real InvoiceLine__c delete) to be:
+```json
+{"id": null, "items": [{"exception": null, "message": null, "payload": {"success": true, "id": "xxx", "errors": []}, "id": "xxx", "statusCode": null, "successful": true}], "successful": true}
+```
+Same `items[].exception` envelope as Create, but `id` is directly on each item (no need to dig into `item.payload.id`), and error detail fields (`message`/`statusCode`) appear to exist at both the item level and (presumably) nested inside a populated `exception` object on failure — this sample is a success case, so which one actually populates on failure is still unconfirmed. Written defensively with `default` to cover both:
+```
+%dw 2.0
+output application/java
+---
+payload.items map (item) -> {
+    success: item.exception == null,
+    id: item.id,
+    errorCode: if (item.exception != null) (item.exception.statusCode default item.statusCode) else null,
+    errorMessage: if (item.exception != null) (item.exception.message default item.message) else null
+}
+```
+```
+Transform Message: extract results (above)
+Set Variable: deleteResults = payload
+Set Variable: logEntries = (vars.logEntries default []) ++ (vars.deleteResults map (r) -> {
+    companyName: vars.companyName,
+    object: "<ObjectName>",
+    status: if (r.success) "Success" else "Failed",
+    salesforce_id: r.id,
+    error_code: r.errorCode,
+    error_message: r.errorMessage
+})
+```
+A single `deleteResults` name is safe to reuse across every delete step (unlike Create's `<thing>Id`/`accountId`/`blaId` variables, which stay alive across many later steps) — it's set, immediately consumed by the very next `logEntries` append, and never referenced again before the next delete overwrites it.
+**TODO**: trigger one deliberate delete failure (e.g. an already-deleted or nonexistent Id) to confirm whether `message`/`statusCode` populate at `item.exception.statusCode`/`item.exception.message` or directly at `item.statusCode`/`item.message` — the `default` fallback works either way for now, but it's worth nailing down for certain.
+
+`delete_log.csv` column order: `companyName, object, status, salesforce_id, error_code, error_message` — same shape as the load flows' `import_log.csv`, just `companyName`-keyed (the delete flow's natural per-iteration identifier) instead of `jobno`/`licenseno`/`RID`. Timestamped filename (`delete_log_<yyyyMMdd_HHmm>.csv`) uses the same `Set Variable` + File Write Path pattern as the load flows' `import_log.csv` — see the note under "Log payload as JSON" near the end of this doc for why the expression can't go inline in the Path field directly.
+
+**Skip the write entirely if nothing was deleted (added 2026-07-22)**: `#[sizeOf(vars.logEntries default []) > 0]` — same `sizeOf(...) > 0` idiom already used elsewhere in this project (e.g. `transform-account-status.dwl`'s `matchingRows` check). `default []` covers the null case (nothing ever appended), `sizeOf(...) > 0` covers an empty-but-initialized array, so a run that deleted nothing doesn't produce an empty/zero-row CSV.
+
+**Comma-in-value CSV bug, found 2026-07-22**: a real company name with a comma (`"John Doe, Inc."`) split across two columns in the written `delete_log.csv` — `companyName` came out as just `"John Doe"` with `" Inc."` bleeding into the next column — meaning the default `as CSV` writer was not auto-quoting values containing the delimiter. Fixed for `delete_log.csv` by forcing `quoteValues=true` on the writer (full-script form, since Studio's File Write Content field is multiline — see Flow Structure above), which quotes every field regardless of content. **Not yet applied elsewhere** — the three load flows' `import_log.csv` writes (`CleanupJewelry`/`CleanupPetroleum`/`CleanupBiWeeklyPayroll`) use the identical unquoted `vars.logEntries as CSV` pattern, and `error_message` in particular is free-text Salesforce error text that can easily contain a comma, so the same column-shift risk is latent there too. **TODO (cross-work-unit)**: add `{quoteValues: true}` to those three writes as well, next time one of them is touched.
 
 **ContentNote/ContentDocumentLink note (2026-07-16, unconfirmed)**: only `ContentNote` is explicitly deleted above, not `ContentDocumentLink` — deleting a `ContentDocument`/`ContentNote` is expected to cascade-delete its `ContentDocumentLink` rows automatically (standard Salesforce Files behavior), so no separate delete step should be needed for the Link. **Not yet verified against this org** — confirm in testing that the `ContentDocumentLink` row actually disappears once its `ContentNote` is deleted, and add an explicit `ContentDocumentLink` delete step here if it doesn't. Also still open: whether `BusinessLicense`/`Assessment`/`AssessmentQuestionResponse` (children of the BLA, not the Account directly) need their own explicit deletes in this same per-BLA loop, or whether they're master-detail children of the BLA that Salesforce cascade-deletes automatically when the BLA itself is deleted.
 
