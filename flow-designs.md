@@ -575,6 +575,8 @@ Invoices load oldest-first, sorted by `deposit_date` (not the pymt_type-derived 
 
 **`jobno` is now a Text field, not Number (2026-07-20)** — incoming data changed; for Jewelry every `jobno` starts with `"CS-"`, no other filter needed. `transform1-filter-and-name.dwl`/`transform-ar-filter-and-name.dwl` updated: filter is now `(row.jobno default "") matches /^CS-.+/` (was the numeric-positive-integer regex against a `.`-stripped value), and the `.`-stripping map/reassignment of `jobno` was dropped entirely since there's no more decimal-export artifact to clean on a Text column. **Confirmed (2026-07-20)**: `transform-bla.dwl`'s `ApplicationType: if (jobno[-2 to -1] == "01") "New" else "Renewal"` needs no change — the last-2-digit convention is unchanged, just now prefixed with `"CS-"` instead of being a bare number, and slicing the last 2 characters of the string works the same either way.
 
+**Correction (2026-07-22)**: `transform-business-license.dwl`'s `Name: "CS-" ++ jobno` was missed in the 2026-07-20 pass — before this change, `jobno` was a bare number (e.g. `"12345"`) so prepending `"CS-"` produced `"CS-12345"`. Now that `jobno` already comes through with the `"CS-"` prefix from the source data, that line was double-prefixing (`"CS-CS-12345"`). Fixed to `Name: jobno`. Worth grepping for any other `"CS-" ++ jobno`-shaped concatenation if one turns up elsewhere — this was the only instance found.
+
 ### Field Mapping
 
 **Invoice__c** (`transform-invoice.dwl`)
