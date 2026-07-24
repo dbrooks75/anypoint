@@ -300,7 +300,7 @@ The combined flow is implemented as a main flow calling out to named sub-flows v
 | `InitAccountRecordType` | **Planned, not actually built in Jewelry** — see note below the sub-flow body |
 | `AddAccount` | Salesforce Create Account, Result & Log Pattern; sets `accountId`. If `accountId != null`, also Choice-gated creates one Account_Status__c (filters the pre-parsed `vars.arRows` to this row's jobno, takes the oldest `deposit_date` — see section 5) |
 | `AddLocationsAndAddresses` | Location(s) → per-location Choice-gated Address__c → PartyAddress__c (see Flow Structure below) |
-| `AddContacts` | Contact list create (0-4), List Result & Log Pattern; independent, no gating |
+| `AddContacts` | Per-candidate (0-4) lookup-before-create, added 2026-07-24: for each candidate, Salesforce Query by name (Jewelry has no Email source field — see transform-contact.dwl); 1 match → AccountContactRelation create, no Contact create; 0 matches → Contact create as before; 2+ matches → skip both, log "Skipped - Ambiguous Match". Independent, no gating |
 | `AddBusinessLicenseApp` | BLA → Choice-gated Business License / Assessment / Assessment Question Response chain; sets `blaId`, appends to `blaJobnoLog` |
 | `AddSentInvoice` | Called **after `AddInvoices` completes**, once per Current-sourced BLA (`blaJobnoLog` filtered on `sourceFileType == "Current"`) — must run last so the Salesforce trigger marks this as the "Active" invoice on the BLA. Creates one Invoice__c (`InvoiceStatus__c: "Sent"`) + InvoiceLine__c per cutover account, no Payment__c (see section 4) |
 | `AddInvoices` | Invoice Load — called once, processing `LaborAR.csv` rows via `vars.blaJobnoLog` lookup → Invoice__c → Choice-gated InvoiceLine__c/Payment__c (see section 3) |
@@ -402,7 +402,7 @@ Set Variable: logEntries = (vars.logEntries default []) ++ [{
 }]
 ```
 
-**List variant** — for transforms that create multiple records in one Create call (Location, Contact, Assessment Question Response). Use `Records: #[payload]` (not `#[[payload]]` — the transform output is already a list) on the Create step itself:
+**List variant** — for transforms that create multiple records in one Create call (Location, Assessment Question Response). Use `Records: #[payload]` (not `#[[payload]]` — the transform output is already a list) on the Create step itself. **Contact no longer fits here as of 2026-07-24** — the `AddContacts`/`AddContactsPetroleum`/`AddContactsBiWeeklyPayroll` sub-flows now create Contacts one at a time inside a per-candidate For Each (lookup-before-create, see those sub-flows' Flow Structure), so each Contact Create uses the single-object variant (`Records: #[[vars.candidate]]`) below instead:
 ```
 Transform Message: extract results
   payload.items map (item) -> {
@@ -469,15 +469,55 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
                               → Transform Message (transform-partyaddress.dwl) → Salesforce Create PartyAddress__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "PartyAddress__c"]
                           Otherwise: (skip — Address failed)
                   Otherwise: (skip — Location failed, Address/PartyAddress not attempted)
-      → Flow Reference: AddContacts
-          → Transform Message (transform-contact.dwl — builds list of 0-4 Contacts, nulls for empty respparty already filtered out)
-          → Salesforce Create Contact (Records: #[payload])
-          → Transform Message: extract results, List Result & Log Pattern → Set Variable: contactResults = payload
-          → Set Variable: contactId = #[if (sizeOf(vars.contactResults) > 0) vars.contactResults[0].id else null]
-            (new, 2026-07-17 — captures the first created Contact's Id, i.e. the `respparty1`-based
-            one if present, for transform-bla.dwl's new PrimaryOwnerId; "first/primary contact"
-            assumption, not yet confirmed which of the up-to-4 contacts should count as primary)
-          → Set Variable: logEntries append (List Result & Log Pattern, object: "Contact") (independent — no gating)
+      → Flow Reference: AddContacts (rewritten 2026-07-24 — per-candidate lookup-before-create,
+          see AccountContactRelation requirement; Jewelry has no Email source field, so the
+          Salesforce Query below matches on name only, unlike Petroleum/BiWeeklyPayroll's
+          email+name match below)
+          → Transform Message (transform-contact.dwl — builds list of 0-4 candidate Contacts, nulls for empty respparty already filtered out)
+          → Set Variable: contactCandidates = payload
+          → Set Variable: contactId = null (reset per-row — otherwise a later row could inherit
+              the previous row's value if this row's loop never sets it, e.g. all candidates ambiguous)
+          → For Each (Collection: #[vars.contactCandidates])
+              → Set Variable: candidate = #[payload]
+              → Set Variable: candidateFirstNameEsc = #[(vars.candidate.FirstName default "") replace "'" with "\\'"]
+              → Set Variable: candidateLastNameEsc = #[(vars.candidate.LastName default "") replace "'" with "\\'"]
+              → Salesforce Query: SELECT Id FROM Contact WHERE FirstName = ':fn' AND LastName = ':ln'
+                  (Parameters: #[{fn: vars.candidateFirstNameEsc, ln: vars.candidateLastNameEsc}])
+              → Set Variable: contactMatches = payload
+              → Choice
+                  When #[sizeOf(vars.contactMatches default []) == 1]:
+                      → Set Variable: matchedContactId = #[vars.contactMatches[0].Id]
+                      → Transform Message (transform-accountcontactrelation.dwl) → Salesforce Create
+                        AccountContactRelation (Records: #[[payload]]) → [Result & Log Pattern →
+                        logEntries, object: "AccountContactRelation"]
+                      → Choice
+                          When #[vars.contactId == null]: Set Variable: contactId = vars.matchedContactId
+                          Otherwise: (leave contactId as-is — already captured from an earlier candidate)
+                  When #[sizeOf(vars.contactMatches default []) > 1]:
+                      → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+                            jobno: vars.row.jobno, object: "Contact", status: "Skipped - Ambiguous Match",
+                            salesforce_id: null, error_code: null,
+                            error_message: "Multiple existing Contacts matched on name"
+                        }]
+                        (contactId is left untouched in this branch — same as a failed Create leaving
+                        `.id` null below; preserves the existing "first candidate's outcome, whatever
+                        it is" semantics for contactId, not "first successful", matching the pre-2026-07-24
+                        behavior this replaces)
+                  Otherwise: (0 matches — create a new Contact, exactly as before)
+                      → Salesforce Create Contact (Records: #[[vars.candidate]])
+                      → Transform Message: extract result, Result & Log Pattern → Set Variable: contactResult = payload
+                      → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+                            jobno: vars.row.jobno, object: "Contact",
+                            status: if (vars.contactResult.success) "Success" else "Failed",
+                            salesforce_id: vars.contactResult.id, error_code: vars.contactResult.errorCode,
+                            error_message: vars.contactResult.errorMessage
+                        }]
+                      → Choice
+                          When #[vars.contactId == null]: Set Variable: contactId = vars.contactResult.id
+                          Otherwise: (leave contactId as-is)
+            (`vars.contactId` still ends up holding the same thing it always did — the first
+            candidate's resolved Id, i.e. the `respparty1`-based one if present, for
+            transform-bla.dwl's PrimaryOwnerId — just now sourced from either a match or a create)
       → Flow Reference: AddBusinessLicenseApp
           (transform-bla.dwl new fields, 2026-07-17: `PrimaryOwnerId` = `vars.contactId` above;
           `SiteStreet`/`SiteCity`/`SiteStateCode`/`SitePostalCode`/`SiteCountryCode` = the Mailing
@@ -893,18 +933,51 @@ For Each row: (Collection: #[vars.mercStdRows])
                         Otherwise: (skip — Address failed)
                 Otherwise: (skip — Location failed, Address/PartyAddress not attempted)
 
-    → Flow Reference: AddContactsPetroleum
-        → Transform Message (transform-contact-petroleum.dwl — 0 or 1 Contact, see field mismatch
-          note above)
-        → Salesforce Create Contact (Records: #[payload])
-        → Transform Message: extract results, List Result & Log Pattern → Set Variable: contactResults = payload
-        → Set Variable: contactId = #[if (sizeOf(vars.contactResults) > 0) vars.contactResults[0].id else null]
-          (new, 2026-07-16 — captures the created Contact's Id for transform-bla-petroleum.dwl's
-          PrimaryOwnerId below; `contactResults` items already have a plain `.id` key per the List
-          Result & Log Pattern's "extract results" shape — see that section — not `.payload.id`,
-          which only exists in the raw pre-extraction Create response. Petroleum only ever produces
-          0 or 1 Contact, unlike Jewelry's up-to-4, so just the first item is needed.)
-        → Set Variable: logEntries append (List Result & Log Pattern, object: "Contact") (independent — no gating)
+    → Flow Reference: AddContactsPetroleum (rewritten 2026-07-24 — per-candidate lookup-before-create,
+        same restructure as Jewelry's AddContacts above, but matching on Email + name since
+        `email_addr` exists in Petroleum's source data)
+        → Transform Message (transform-contact-petroleum.dwl — 0 or 1 candidate Contact, see field
+          mismatch note above)
+        → Set Variable: contactCandidates = payload
+        → Set Variable: contactId = null (reset per-row, same reasoning as Jewelry's AddContacts)
+        → For Each (Collection: #[vars.contactCandidates])
+            → Set Variable: candidate = #[payload]
+            → Set Variable: candidateFirstNameEsc = #[(vars.candidate.FirstName default "") replace "'" with "\\'"]
+            → Set Variable: candidateLastNameEsc = #[(vars.candidate.LastName default "") replace "'" with "\\'"]
+            → Set Variable: candidateEmailEsc = #[(vars.candidate.Email default "") replace "'" with "\\'"]
+            → Salesforce Query: SELECT Id FROM Contact WHERE Email = ':em' AND FirstName = ':fn' AND LastName = ':ln'
+                (Parameters: #[{em: vars.candidateEmailEsc, fn: vars.candidateFirstNameEsc, ln: vars.candidateLastNameEsc}])
+            → Set Variable: contactMatches = payload
+            → Choice
+                When #[sizeOf(vars.contactMatches default []) == 1]:
+                    → Set Variable: matchedContactId = #[vars.contactMatches[0].Id]
+                    → Transform Message (transform-accountcontactrelation.dwl) → Salesforce Create
+                      AccountContactRelation (Records: #[[payload]]) → [Result & Log Pattern →
+                      logEntries, object: "AccountContactRelation"]
+                    → Choice
+                        When #[vars.contactId == null]: Set Variable: contactId = vars.matchedContactId
+                        Otherwise: (leave contactId as-is)
+                When #[sizeOf(vars.contactMatches default []) > 1]:
+                    → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+                          licenseno: vars.row.licenseno, object: "Contact", status: "Skipped - Ambiguous Match",
+                          salesforce_id: null, error_code: null,
+                          error_message: "Multiple existing Contacts matched on email + name"
+                      }]
+                Otherwise: (0 matches — create a new Contact, exactly as before)
+                    → Salesforce Create Contact (Records: #[[vars.candidate]])
+                    → Transform Message: extract result, Result & Log Pattern → Set Variable: contactResult = payload
+                    → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+                          licenseno: vars.row.licenseno, object: "Contact",
+                          status: if (vars.contactResult.success) "Success" else "Failed",
+                          salesforce_id: vars.contactResult.id, error_code: vars.contactResult.errorCode,
+                          error_message: vars.contactResult.errorMessage
+                      }]
+                    → Choice
+                        When #[vars.contactId == null]: Set Variable: contactId = vars.contactResult.id
+                        Otherwise: (leave contactId as-is)
+          (`vars.contactId` still ends up holding the created-or-matched Contact's Id for
+          transform-bla-petroleum.dwl's PrimaryOwnerId, same as before this restructure. Petroleum
+          only ever produces 0 or 1 candidate, so the For Each runs at most once per row.)
 
     → Flow Reference: AddBusinessLicenseAppPetroleum
         → Transform Message (transform-bla-petroleum.dwl)
@@ -1338,22 +1411,56 @@ Two independent Contacts per row (not gated on each other), each skipped entirel
 Built `transform-contact-biweeklypayroll.dwl` implementing both. `RIagentAddr/City/State/Zip` are **not used** — no address is created for the RI agent, only `RIagentName`/`RIagentTel` feed Salesforce.
 
 ### Contact Flow Structure (`AddContactsBiWeeklyPayroll`, independent — no downstream gating, same as Jewelry/Petroleum's `AddContacts`)
+Rewritten 2026-07-24 — per-candidate lookup-before-create, same restructure as Jewelry/Petroleum
+above, matching on Email + name since `Email` exists in BiWeeklyPayroll's source data:
 ```
 Flow Reference: AddContactsBiWeeklyPayroll
-  → Transform Message (transform-contact-biweeklypayroll.dwl — 0-2 items)
-  → Salesforce Create Contact(s): Records = #[payload]   (no intermediate `contactList` variable needed —
-      unlike Location, nothing downstream needs to look back at the original records; matches Jewelry's
-      actual AddContacts pattern, which also skips this)
-  → Transform Message (extract results, List Result & Log Pattern) → Set Variable: contactResults = payload
-  → Set Variable: contactId = #[if (sizeOf(vars.contactResults) > 0) vars.contactResults[0].id else null]
-    (new, 2026-07-17 — captures the first created Contact's Id, i.e. the Company Contact if present
-    (index 0 in transform-contact-biweeklypayroll.dwl's list, before the RI Agent), for
-    transform-bla-biweeklypayroll.dwl's new PrimaryOwnerId; "first/primary contact" assumption,
-    not yet confirmed)
-  → Set Variable: logEntries = (vars.logEntries default []) ++ (vars.contactResults map (r) -> {
-        RID: vars.row.RID, object: "Contact", status: if (r.success) "Success" else "Failed",
-        salesforce_id: r.id, error_code: r.errorCode, error_message: r.errorMessage
-    })
+  → Transform Message (transform-contact-biweeklypayroll.dwl — 0-2 candidate Contacts)
+  → Set Variable: contactCandidates = payload
+  → Set Variable: contactId = null (reset per-row, same reasoning as Jewelry's AddContacts)
+  → For Each (Collection: #[vars.contactCandidates])
+      → Set Variable: candidate = #[payload]
+      → Set Variable: candidateFirstNameEsc = #[(vars.candidate.FirstName default "") replace "'" with "\\'"]
+      → Set Variable: candidateLastNameEsc = #[(vars.candidate.LastName default "") replace "'" with "\\'"]
+      → Set Variable: candidateEmailEsc = #[(vars.candidate.Email default "") replace "'" with "\\'"]
+      → Salesforce Query: SELECT Id FROM Contact WHERE Email = ':em' AND FirstName = ':fn' AND LastName = ':ln'
+          (Parameters: #[{em: vars.candidateEmailEsc, fn: vars.candidateFirstNameEsc, ln: vars.candidateLastNameEsc}])
+          (the RI contact only ever sets `LastName`, no `Email`/`FirstName` — both bind params come
+          through as "" via the `default ""` above, which still queries fine, it just won't match any
+          real Contact unless one genuinely has blank FirstName/Email, so the RI contact behaves as
+          an effective always-0-matches candidate and always falls to the Create branch below, same
+          as before this restructure)
+      → Set Variable: contactMatches = payload
+      → Choice
+          When #[sizeOf(vars.contactMatches default []) == 1]:
+              → Set Variable: matchedContactId = #[vars.contactMatches[0].Id]
+              → Transform Message (transform-accountcontactrelation.dwl) → Salesforce Create
+                AccountContactRelation (Records: #[[payload]]) → [Result & Log Pattern →
+                logEntries, object: "AccountContactRelation"]
+              → Choice
+                  When #[vars.contactId == null]: Set Variable: contactId = vars.matchedContactId
+                  Otherwise: (leave contactId as-is)
+          When #[sizeOf(vars.contactMatches default []) > 1]:
+              → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+                    RID: vars.row.RID, object: "Contact", status: "Skipped - Ambiguous Match",
+                    salesforce_id: null, error_code: null,
+                    error_message: "Multiple existing Contacts matched on email + name"
+                }]
+          Otherwise: (0 matches — create a new Contact, exactly as before)
+              → Salesforce Create Contact (Records: #[[vars.candidate]])
+              → Transform Message: extract result, Result & Log Pattern → Set Variable: contactResult = payload
+              → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+                    RID: vars.row.RID, object: "Contact",
+                    status: if (vars.contactResult.success) "Success" else "Failed",
+                    salesforce_id: vars.contactResult.id, error_code: vars.contactResult.errorCode,
+                    error_message: vars.contactResult.errorMessage
+                }]
+              → Choice
+                  When #[vars.contactId == null]: Set Variable: contactId = vars.contactResult.id
+                  Otherwise: (leave contactId as-is)
+    (`vars.contactId` still ends up holding the Company Contact's Id if present — first in
+    transform-contact-biweeklypayroll.dwl's list, before the RI Agent — for
+    transform-bla-biweeklypayroll.dwl's PrimaryOwnerId, same as before this restructure)
 ```
 
 ### BLA (Business License Application) — confirmed rules so far (2026-07-14)
