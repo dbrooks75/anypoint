@@ -1856,6 +1856,32 @@ The `SandboxName`/`SFUserName` columns added earlier (see `SandboxName`/`SFUserN
 
 ---
 
+## 9. Proposed: Jewelry At-Scale Restructure — Per-Account End-to-End + Incremental Log Append (Not yet applied, 2026-07-26)
+
+**Trigger**: running the full Jewelry historical load (~4500 accounts, vs. the ~120-account test batches used so far) surfaced a real risk in the current design — per section 2's Flow Structure, `logEntries` only gets written to `import_log.csv` in a single File Write at the very end of the whole run. An uncaught error partway through (e.g. row 3000 of 4500) kills the flow before that write happens, losing the in-memory log for every account already processed, even though those Salesforce records were actually created and exist.
+
+**Proposal**: restructure so each account's entire chain — Account → Locations/Addresses → Contacts → Business License Application → Business License/Assessment/Assessment Question Response → that account's own Invoices → that account's own Sent Invoice (if Current-sourced) — completes fully within one `For Each` iteration, then append that iteration's `logEntries` to disk before moving to the next account. A crash on account 3000 then only loses account 3000's own not-yet-flushed log entries, not the prior 2999.
+
+### Required restructure: nest `AddInvoices`/`AddSentInvoice` per account
+Today (sections 3 and 4), `AddInvoices` and `AddSentInvoice` run as two separate passes *after* the entire labor_std `For Each` completes — `AddInvoices` iterates all of `LaborAR.csv` once (joined to `blaJobnoLog` by jobno), then `AddSentInvoice` runs once more, filtered to `Current`-sourced BLAs. To fold this into each account's own iteration instead:
+- Inside the per-account loop, after `AddBusinessLicenseApp` sets `blaId`, filter `vars.arRows` (already parsed once upfront — see section 2) down to just this row's `jobno`: `#[vars.arRows filter (r) -> r.jobno == vars.row.jobno]`.
+- Create that account's Invoice__c/InvoiceLine__c/Payment__c from the filtered rows (same per-row Choice-gated logic as today's `AddInvoices` body, just scoped to one jobno instead of the whole file).
+- If `vars.row.SourceFileType == "Current"`, immediately follow with that account's Sent Invoice (today's `AddSentInvoice` body, called once per account instead of once per work unit).
+
+**Confirmed safe, 2026-07-26**: the "must be the last invoice created" trigger (section 4) that marks an invoice Active is scoped **per BLA**, not globally-most-recent-across-all-BLAs — so as long as this account's own Sent Invoice is created after this account's own AR-driven invoices (which nesting guarantees), the trigger still marks the right one Active on that BLA. No cross-account ordering dependency exists, so nesting per account is safe without needing all 4500 accounts' AR invoices to exist first.
+
+### Incremental log append mechanics
+- Compute `vars.logFilename` **once, before** the main `For Each` starts — not per account. Recomputing the `now()`-based timestamp inside the loop would start a new file almost every iteration.
+- File Write mode: **Append**, not the current Overwrite.
+- Header row: written once on the very first append; every subsequent append uses `{header: false}` on the `as CSV` writer, or the file ends up with ~4500 repeated header rows.
+- After each successful append, reset `vars.logEntries = []` — otherwise every account's write re-writes every prior account's entries too, and the file grows quadratically with duplicated rows.
+
+### Open questions / not yet applied
+- Whether to append after literally every single account, or batch (e.g. every 25-50 accounts) to reduce file open/close overhead across 4500 iterations — full per-account is safer (smaller blast radius on failure) but more I/O; not yet decided.
+- This section documents intent only — not yet built in Studio. Sections 2-4's existing documented design (single end-of-run log write, separate post-loop Invoice/SentInvoice passes) remains the last-confirmed-working state until this restructure is implemented and verified.
+
+---
+
 ## PostgreSQL Reconciliation Log (deferred — see TODO above)
 
 ### DDL
