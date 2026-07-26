@@ -37,7 +37,12 @@ var riAgentPhone = vars.row.RIagentTel default ""
             LastName: riAgentName,
             Title: "RI Agent",
             AccountId: vars.accountId,
-            Phone: if (riAgentPhone != "") riAgentPhone else "(999) 999-9999"
+            Phone: if (riAgentPhone != "") riAgentPhone else "(999) 999-9999",
+            MailingStreet: vars.row.RIagentAddr,
+            MailingCity: vars.row.RIagentCity,
+            MailingStateCode: vars.row.RIagentState,
+            MailingPostalCode: vars.row.RIagentZip,
+            MailingCountryCode: "US"
         }
     else null
 ] filter (c) -> c != null

@@ -1407,8 +1407,13 @@ Two independent Contacts per row (not gated on each other), each skipped entirel
 | `Title` | — | Hardcoded `"RI Agent"` |
 | `AccountId` | `vars.accountId` | |
 | `Phone` | `RIagentTel` | Defaults to `"(999) 999-9999"` if blank |
+| `MailingStreet` | `RIagentAddr` | |
+| `MailingCity` | `RIagentCity` | |
+| `MailingStateCode` | `RIagentState` | |
+| `MailingPostalCode` | `RIagentZip` | |
+| `MailingCountryCode` | — | Hardcoded `"US"`, same convention as `SiteCountryCode` on BLA |
 
-Built `transform-contact-biweeklypayroll.dwl` implementing both. `RIagentAddr/City/State/Zip` are **not used** — no address is created for the RI agent, only `RIagentName`/`RIagentTel` feed Salesforce.
+Built `transform-contact-biweeklypayroll.dwl` implementing both, including the RI agent's mailing address (`RIagentAddr/City/State/Zip` — added 2026-07-23, superseding the earlier "not used" note) via Contact's standard compound Mailing address fields, same `*StateCode`/`*CountryCode` convention as BLA's `Site*` fields.
 
 ### Contact Flow Structure (`AddContactsBiWeeklyPayroll`, independent — no downstream gating, same as Jewelry/Petroleum's `AddContacts`)
 Rewritten 2026-07-24 — per-candidate lookup-before-create, same restructure as Jewelry/Petroleum
