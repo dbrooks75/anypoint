@@ -26,7 +26,7 @@ var mailingStreet =
     AmountPaid: 0,
     Status: "Approved",
     // Placeholder — see dev-questions.md for what this should actually be
-    AppliedDate: |1900-01-01T00:00:00Z|,
+    AppliedDate: |1900-01-01T12:00:00Z|,
     Category: "License",
     Trade__c: "Labor Standards",
     LicenseTypeId: vars.licenseTypeId,

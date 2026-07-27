@@ -26,7 +26,7 @@ var applicationType =
     AmountPaid: 0,
     Status: status,
     AppliedDate: if ((vars.row.DateRecd default "") != "")
-        ((vars.row.DateRecd as Date {format: "M/d/yyyy"} as String {format: "yyyy-MM-dd"}) ++ "T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
+        ((vars.row.DateRecd as Date {format: "M/d/yyyy"} as String {format: "yyyy-MM-dd"}) ++ "T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null,
     Category: "License",
     Trade__c: null,

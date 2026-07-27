@@ -31,14 +31,14 @@ var hasCurrentYearDeposit = sizeOf(currentYearArRows) > 0
 
 var expirationDateTime =
     if ((vars.row.SourceFileType default "") == "Current")
-        ((if (hasCurrentYearDeposit) "2027" else "2026") ++ "-07-31T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
+        ((if (hasCurrentYearDeposit) "2027" else "2026") ++ "-07-31T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else if (licenseIssuedYear != "")
-        (((licenseIssuedYear as Number) + 1) as String {format: "0"} ++ "-07-31T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
+        (((licenseIssuedYear as Number) + 1) as String {format: "0"} ++ "-07-31T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null
 
 var periodStartDateTime =
     if (licenseIssuedYear != "")
-        ((licenseIssuedYear as Number) as String {format: "0"} ++ "-08-01T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
+        ((licenseIssuedYear as Number) as String {format: "0"} ++ "-08-01T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null
 
 // Issue_Date__c = same date value as PeriodStart, but plain Date (not DateTime)

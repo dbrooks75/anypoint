@@ -53,7 +53,7 @@ var mailingStreet =
     AmountPaid: amountPaid,
     Status: status,
     // Placeholder — see dev-questions.md for what this should actually be
-    AppliedDate: |1900-01-01T00:00:00Z|,
+    AppliedDate: |1900-01-01T12:00:00Z|,
     Category: "License",
     // Placeholder — see dev-questions.md for what Trade__c should be for Petroleum
     Trade__c: "TBD",

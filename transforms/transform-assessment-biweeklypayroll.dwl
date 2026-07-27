@@ -17,14 +17,14 @@ var effectiveDate = laterDate(vars.row.DateApproved, vars.row.DateRenewed)
 
 var effectiveDateTime =
     if (effectiveDate != null)
-        ((effectiveDate as String {format: "yyyy-MM-dd"}) ++ "T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
+        ((effectiveDate as String {format: "yyyy-MM-dd"}) ++ "T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null
 
 var expirationDate = parseDate(vars.row.DateExpired)
 
 var expirationDateTime =
     if (expirationDate != null)
-        ((expirationDate as String {format: "yyyy-MM-dd"}) ++ "T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
+        ((expirationDate as String {format: "yyyy-MM-dd"}) ++ "T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null
 ---
 {

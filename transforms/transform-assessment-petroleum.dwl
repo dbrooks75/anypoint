@@ -5,7 +5,7 @@ var issueDate = vars.row.date_issued default ""
 
 var issueDateTime =
     if (issueDate != "")
-        ((issueDate as Date {format: "M/d/yyyy"} as String {format: "yyyy-MM-dd"}) ++ "T00:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
+        ((issueDate as Date {format: "M/d/yyyy"} as String {format: "yyyy-MM-dd"}) ++ "T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null
 ---
 {
