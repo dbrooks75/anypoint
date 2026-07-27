@@ -3,6 +3,10 @@ output application/java
 
 var jobno = vars.row.jobno default ""
 
+var status = if ((vars.row.SourceFileType default "") == "Current")
+    "Draft"
+else "Approved"
+
 // SiteAddress = the Mailing address, same PO-Box-detection logic as transform-address.dwl's
 // isMailing branch (Jewelry shares the same add1/add2/city/state/zip fields as Petroleum)
 var add1 = vars.row.add1 default ""
@@ -24,7 +28,7 @@ var mailingStreet =
     ApplicationType: if (jobno[-2 to -1] == "01") "New" else "Renewal",
     // Jewelry: hardcoded to 0. Original formula: if ((vars.row.tot_pymt default "") != "") vars.row.tot_pymt as Number else null
     AmountPaid: 0,
-    Status: "Approved",
+    Status: status,
     // Placeholder — see dev-questions.md for what this should actually be
     AppliedDate: |1900-01-01T12:00:00Z|,
     Category: "License",
