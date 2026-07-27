@@ -19,6 +19,27 @@ var applicationType =
     if ((vars.row.TypAppl default "") == "Initial") "New"
     else if ((vars.row.TypAppl default "") == "Re-application") "Renewal"
     else "Initial"
+
+// Omni_JSON_Data__c: AnswerList JSON built from vars.aqrQuestions (see
+// transform-aqr-questions-biweeklypayroll.dwl), computed before this transform runs. MultiSelect
+// answers (e.g. "Payment Method") are reshaped from the semicolon-joined string the AQR record
+// needs into a real JSON array — unconfirmed delimiter assumption ("; "), matches
+// transform-aqr-questions-biweeklypayroll.dwl's normalizePaymentMethods joinBy.
+fun jsonValue(q) =
+    if (q.dataType == "MultiSelect" and q.value != null) (q.value as String splitBy "; ")
+    else q.value
+
+var omniJsonData = write(
+    { AnswerList: vars.aqrQuestions map (q) -> {
+        value: jsonValue(q),
+        dataType: q.dataType,
+        answeredIndex: q.answeredIndex,
+        category: q.category,
+        questionText: q.questionText,
+        versionId: q.versionId
+    }},
+    "application/json"
+)
 ---
 {
     AccountId: vars.accountId,
@@ -32,6 +53,7 @@ var applicationType =
     Trade__c: null,
     LicenseTypeId: vars.licenseTypeId,
     Description: "Legacy RID: " ++ rid,
+    Omni_JSON_Data__c: omniJsonData,
     PrimaryOwnerId: vars.contactId,
     SiteStreet: vars.row.CompanyAddr default "",
     SiteCity: vars.row.CompanyCity default "",

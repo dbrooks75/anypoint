@@ -22,6 +22,26 @@ var mailingStreet =
         add1 ++ " " ++ add2
     else
         if (add1 != "") add1 else add2
+
+// Omni_JSON_Data__c: AnswerList JSON built from vars.aqrQuestions (see transform-aqr-questions.dwl),
+// computed before this transform runs. MultiSelect answers are reshaped from the semicolon-joined
+// string the AQR record needs into a real JSON array — unconfirmed delimiter assumption ("; "),
+// matches transform-aqr-questions-biweeklypayroll.dwl's normalizePaymentMethods joinBy.
+fun jsonValue(q) =
+    if (q.dataType == "MultiSelect" and q.value != null) (q.value as String splitBy "; ")
+    else q.value
+
+var omniJsonData = write(
+    { AnswerList: vars.aqrQuestions map (q) -> {
+        value: jsonValue(q),
+        dataType: q.dataType,
+        answeredIndex: q.answeredIndex,
+        category: q.category,
+        questionText: q.questionText,
+        versionId: q.versionId
+    }},
+    "application/json"
+)
 ---
 {
     AccountId: vars.accountId,
@@ -35,6 +55,7 @@ var mailingStreet =
     Trade__c: "Labor Standards",
     LicenseTypeId: vars.licenseTypeId,
     Description: "Legacy Job Number: " ++ jobno,
+    Omni_JSON_Data__c: omniJsonData,
     PrimaryOwnerId: vars.contactId,
     SiteStreet: mailingStreet,
     SiteCity: vars.row.city default "",

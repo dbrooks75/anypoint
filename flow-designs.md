@@ -1884,6 +1884,33 @@ Today (sections 3 and 4), `AddInvoices` and `AddSentInvoice` run as two separate
 
 ---
 
+## 10. `Omni_JSON_Data__c` — AQR Answers as JSON on BLA (all work units, 2026-07-27)
+
+**New requirement**: `Business_License_Application__c.Omni_JSON_Data__c` needs a JSON string representation of that BLA's Assessment Question Response answers, shape confirmed from a real Salesforce record:
+```json
+{"AnswerList": [
+    {"value": "No", "dataType": "Text", "answeredIndex": 0, "category": "General", "questionText": "Does the company's average payroll exceed 200% of State minimum wage?", "versionId": "0lFcp0000005uxdEAA"},
+    ...
+]}
+```
+`value` varies by `dataType` — plain string/number for `Text`/`Number`, boolean for `Checkbox`, ISO date string for `Date`, and a real JSON array (not a delimited string) for `MultiSelect`.
+
+### Design decisions (2026-07-27)
+1. **`dataType` is queried from Salesforce**, not hardcoded per question — `AssessmentQuestionVersion.DataType` is a real field (already confirmed to exist, see section 7's BiWeeklyPayroll Version-1-vs-2 pin note) and just needs adding to the existing `SELECT Id, QuestionText, Name, VersionNumber FROM AssessmentQuestionVersion` query in all three `InitAssessmentQuestionVersion*` sub-flows (section 2, section 6, section 7) → `SELECT Id, QuestionText, Name, VersionNumber, DataType FROM AssessmentQuestionVersion`. **Not yet applied in Studio.**
+2. **`category` is hardcoded `"General"`** — no evidence yet it's a real per-question Salesforce field (unlike `DataType`), just happens to be `"General"` for every answer in the one example seen so far. Treated as an unconfirmed placeholder, same convention as Petroleum's `Trade__c: "TBD"` — revisit if it turns out to vary.
+3. **Per-question answer computation is now shared**, not duplicated between the AQR-creation transform and a separate JSON-builder. Each work unit gets a new upfront transform (`transform-aqr-questions.dwl` / `transform-aqr-questions-petroleum.dwl` / `transform-aqr-questions-biweeklypayroll.dwl`) that resolves the full per-question answer list — `{name, answeredIndex, category, questionText, versionId, dataType, value, dateValue, integerValue, choiceValue, responseText}` — once, from `vars.row` + `vars.aqvMap` only. Since this doesn't depend on `vars.assessmentId`/`vars.blaId` (only the existing AQR-creation step's final `Assessment_Question_Response__c.AssessmentId` field does), it's safe to compute **before** `AddBusinessLicenseApp*` runs at all, stored as `vars.aqrQuestions`.
+   - `transform-bla*.dwl` reads `vars.aqrQuestions` to build `Omni_JSON_Data__c` (new `omniJsonData` var + `jsonValue()` helper in each file).
+   - `transform-assessment-question-response*.dwl` (Jewelry/Petroleum/BiWeeklyPayroll) simplified to just map `vars.aqrQuestions` into AQR create records — the old duplicated `questions` array + `aqvMap[name]` lookup + hand-written `responseType` metadata moved into the new upfront transform. BiWeeklyPayroll's payment-method/day/salary-range normalization helper functions (`normalizePaymentMethods`, `normalizeDayValue`, `safeVal`, `convertToBiweekly`, `getBiweeklySalary`) moved there too.
+4. **`value` resolution** — generic priority-order check across the four typed fields (`dateValue` → `integerValue` → `choiceValue` → `responseText`, first non-`null` wins), not hand-authored per question. Safe because each question only ever populates one of the four (confirmed by inspecting all three existing AQR transforms) and DataWeave's `!= null` correctly treats `false`/`0` as present, not absent — so Checkbox answers that are genuinely `false` still resolve correctly instead of falling through as unanswered.
+5. **MultiSelect reshaping** — Salesforce's `ChoiceValue` on the AQR record needs the semicolon-joined string form (e.g. BiWeeklyPayroll's `"Check; Direct Deposit"`, from `normalizePaymentMethods`'s `joinBy "; "`), but the JSON needs a real array (`["Check", "Direct Deposit"]`, per the confirmed example shape). Each `transform-bla*.dwl`'s new `jsonValue()` helper splits on `"; "` only when `dataType == "MultiSelect"` — the AQR-creation transform is untouched and keeps the joined-string form. **Unconfirmed**: the `"; "` delimiter assumption, since only BiWeeklyPayroll's `Payment Method` question currently produces a MultiSelect-shaped answer to test against.
+
+### Studio changes still needed (not yet applied)
+- Add `DataType` to all three `InitAssessmentQuestionVersion*` SOQL queries.
+- Insert a new **Transform Message + Set Variable: `aqrQuestions`** step in each work unit's per-row flow, placed after `Set Variable: row = payload` (and after the once-only `InitAssessmentQuestionVersion*` has run) but **before** `AddBusinessLicenseApp*` is called — the three new `transform-aqr-questions*.dwl` files are the transform for that step.
+- No other flow reordering needed — `AddBusinessLicenseApp*`'s existing BLA → BusinessLicense/Assessment/AQR chain is otherwise unchanged, just now reading `vars.aqrQuestions` instead of rebuilding it inline at AQR-creation time.
+
+---
+
 ## PostgreSQL Reconciliation Log (deferred — see TODO above)
 
 ### DDL
