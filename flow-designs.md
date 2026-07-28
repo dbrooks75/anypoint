@@ -497,7 +497,10 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
                       → Set Variable: logEntries = (vars.logEntries default []) ++ [{
                             jobno: vars.row.jobno, object: "Contact", status: "Skipped - Ambiguous Match",
                             salesforce_id: null, error_code: null,
-                            error_message: "Multiple existing Contacts matched on name"
+                            error_message: "Multiple existing Contacts matched on name: " ++
+                                (vars.candidate.FirstName default "") ++ " " ++ (vars.candidate.LastName default "")
+                                (2026-07-28 — includes the candidate's name in the message; Jewelry has
+                                no Email field on candidates at all, see transform-contact.dwl)
                         }]
                         (contactId is left untouched in this branch — same as a failed Create leaving
                         `.id` null below; preserves the existing "first candidate's outcome, whatever
@@ -983,7 +986,10 @@ For Each row: (Collection: #[vars.mercStdRows])
                     → Set Variable: logEntries = (vars.logEntries default []) ++ [{
                           licenseno: vars.row.licenseno, object: "Contact", status: "Skipped - Ambiguous Match",
                           salesforce_id: null, error_code: null,
-                          error_message: "Multiple existing Contacts matched on email + name"
+                          error_message: "Multiple existing Contacts matched on email + name: " ++
+                              (vars.candidate.FirstName default "") ++ " " ++ (vars.candidate.LastName default "") ++
+                              " <" ++ (vars.candidate.Email default "") ++ ">"
+                              (2026-07-28 — includes the candidate's name/email in the message)
                       }]
                 Otherwise: (0 matches — create a new Contact, exactly as before)
                     → Salesforce Create Contact (Records: #[[vars.candidate]])
@@ -1465,10 +1471,12 @@ Flow Reference: AddContactsBiWeeklyPayroll
       → Salesforce Query: SELECT Id FROM Contact WHERE Email = ':em' AND FirstName = ':fn' AND LastName = ':ln'
           (Parameters: #[{em: vars.candidateEmailEsc, fn: vars.candidateFirstNameEsc, ln: vars.candidateLastNameEsc}])
           (the RI contact only ever sets `LastName`, no `Email`/`FirstName` — both bind params come
-          through as "" via the `default ""` above, which still queries fine, it just won't match any
-          real Contact unless one genuinely has blank FirstName/Email, so the RI contact behaves as
-          an effective always-0-matches candidate and always falls to the Create branch below, same
-          as before this restructure)
+          through as "" via the `default ""` above, which still queries fine. **Correction
+          (2026-07-28)**: this was assumed to always fall through to the 0-matches Create branch,
+          since it seemed unlikely any real Contact would have both `Email` and `FirstName` blank —
+          **wrong**, confirmed in testing: the org has multiple existing Contacts with blank
+          `Email`/`FirstName` sharing the same `LastName`, so the RI Agent candidate hit the
+          2+-matches "Ambiguous Match" branch below in practice, not the Create branch as assumed.)
       → Set Variable: contactMatches = payload
       → Choice
           When #[sizeOf(vars.contactMatches default []) == 1]:
@@ -1483,7 +1491,13 @@ Flow Reference: AddContactsBiWeeklyPayroll
               → Set Variable: logEntries = (vars.logEntries default []) ++ [{
                     RID: vars.row.RID, object: "Contact", status: "Skipped - Ambiguous Match",
                     salesforce_id: null, error_code: null,
-                    error_message: "Multiple existing Contacts matched on email + name"
+                    error_message: "Multiple existing Contacts matched on email + name: " ++
+                        (vars.candidate.FirstName default "") ++ " " ++ (vars.candidate.LastName default "") ++
+                        " <" ++ (vars.candidate.Email default "") ++ ">"
+                        (2026-07-28 — includes the candidate's name/email in the message; this is the
+                        branch the RI Agent candidate actually hits, see correction above — its
+                        FirstName/Email come through blank via `default ""`, so the message reads
+                        e.g. " Smith <>")
                 }]
           Otherwise: (0 matches — create a new Contact, exactly as before)
               → Salesforce Create Contact (Records: #[[vars.candidate]])
