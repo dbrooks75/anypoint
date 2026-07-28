@@ -3,14 +3,11 @@ output application/java
 
 var licenseno = vars.row.licenseno default ""
 
-// AmountPaid = tot_pymt_amt from the MercAR.csv record with the max deposit_date, matched by licenseno
 var matchingArRows = vars.mercArRows filter (row) -> (row.licenseno default "") == licenseno
 
 var latestArRow = if (sizeOf(matchingArRows) > 0)
     (matchingArRows orderBy (row) -> row.deposit_date as Date {format: "M/d/yyyy"})[-1]
   else null
-
-var amountPaid = if (latestArRow != null) latestArRow.tot_pymt_amt as Number else null
 
 var applicationType = if (sizeOf(matchingArRows) > 0) "Renewal" else "New"
 
@@ -23,6 +20,10 @@ var hasCurrentYearDeposit = sizeOf(currentYearArRows) > 0
 var status = if ((vars.row.SourceFileType default "") == "Current")
         (if (hasCurrentYearDeposit) "Approved" else "Draft")
     else "Approved"
+
+// AmountPaid: 0 if Status is Draft; otherwise tot_pymt_amt from the MercAR.csv record with the
+// max deposit_date, matched by licenseno (2026-07-28, supersedes the earlier status-independent rule)
+var amountPaid = if (status == "Draft") 0 else (if (latestArRow != null) latestArRow.tot_pymt_amt as Number else null)
 
 var insExpireDate = vars.row.ins_expire_date default ""
 
