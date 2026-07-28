@@ -1315,6 +1315,7 @@ Run once at flow start, same as Petroleum's `InitAccountRecordTypePetroleum` (se
 | `BillingState` | `CompanyState` | Same `stateNames` 2-letter→full-name lookup table as Jewelry/Petroleum (`transform2-account.dwl`/`transform-account-petroleum.dwl`), fallback to raw value if not found |
 | `BillingPostalCode` | `CompanyZip` | |
 | `Preferred_Method_of_Comm__c` | — | Hardcoded `"Mail"` (2026-07-15) — same for all three units (Jewelry `transform2-account.dwl`, Petroleum `transform-account-petroleum.dwl`, BiWeeklyPayroll `transform-account-biweeklypayroll.dwl`); no source field, new Account field added across all three at once |
+| `Conversion_Identifier__c` | — | Hardcoded `"R1-Conversion"` (2026-07-28) — same for all three units, same "no source field, added across all three at once" pattern as `Preferred_Method_of_Comm__c` above |
 
 Built `transform-account-biweeklypayroll.dwl` (new file) implementing this — `fixFein` and `stateNames` duplicated in-file, same pattern as Petroleum's copy in `transform-account-petroleum.dwl`.
 
@@ -1923,7 +1924,11 @@ Today (sections 3 and 4), `AddInvoices` and `AddSentInvoice` run as two separate
   - ~~BiWeeklyPayroll~~ — done, loaded and tested in Studio, 2026-07-28.
 - No other flow reordering needed — `AddBusinessLicenseApp*`'s existing BLA → BusinessLicense/Assessment/AQR chain is otherwise unchanged, just now reading `vars.aqrQuestions` instead of rebuilding it inline at AQR-creation time.
 
-**Confirmed end to end (Jewelry, 2026-07-28)**: updated `transform-bla.dwl`/`transform-assessment-question-response.dwl` Transform Message scripts loaded into Studio, BLA created successfully, `Omni_JSON_Data__c` populated with the expected `AnswerList` JSON. Petroleum/BiWeeklyPayroll's equivalent Transform Message updates not yet confirmed loaded — same two-file swap (`transform-bla-petroleum.dwl`/`transform-assessment-question-response-petroleum.dwl`, `transform-bla-biweeklypayroll.dwl`/`transform-assessment-question-response-biweeklypayroll.dwl`) still needed there.
+**Confirmed end to end (Jewelry, 2026-07-28)**: updated `transform-bla.dwl`/`transform-assessment-question-response.dwl` Transform Message scripts loaded into Studio, BLA created successfully, `Omni_JSON_Data__c` populated with the expected `AnswerList` JSON.
+
+**Confirmed end to end (Petroleum, 2026-07-28)**: same two-file swap (`transform-bla-petroleum.dwl`/`transform-assessment-question-response-petroleum.dwl`) loaded into Studio and tested working.
+
+BiWeeklyPayroll's equivalent Transform Message updates (`transform-bla-biweeklypayroll.dwl`/`transform-assessment-question-response-biweeklypayroll.dwl`) not yet confirmed loaded.
 
 ---
 
