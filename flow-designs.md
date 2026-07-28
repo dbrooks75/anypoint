@@ -146,6 +146,23 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
       → Salesforce Delete (PartyAddress__c, Ids = vars.partyAddressIds) → [Delete Result & Log Pattern → logEntries, object: "PartyAddress__c"]
       → Salesforce Delete (Address__c, Ids = vars.addressIds) → [Delete Result & Log Pattern → logEntries, object: "Address__c"]
       → Salesforce Delete (Location, Ids = vars.locationIds) → [Delete Result & Log Pattern → logEntries, object: "Location"]
+      → Salesforce Query: SELECT Id FROM AccountContactRelation WHERE AccountId = :accountId
+          (Parameters: #[{accountId: vars.accountId}])
+      → Salesforce Delete (AccountContactRelation) → [Delete Result & Log Pattern → logEntries, object: "AccountContactRelation"]
+      → Salesforce Query: SELECT Id FROM Contact WHERE AccountId = :accountId
+          (Parameters: #[{accountId: vars.accountId}]) → Transform Message: extract Id list → Set Variable: candidateContactIds
+      → Set Variable: deletableContactIds = []
+      → For Each (Collection: #[vars.candidateContactIds])
+          → Set Variable: candidateContactId = #[payload]
+          → Salesforce Query: SELECT Id FROM AccountContactRelation WHERE ContactId = :candidateContactId
+              (Parameters: #[{candidateContactId: vars.candidateContactId}])
+              (this account's own AccountContactRelation rows were already deleted just above, so any
+              rows still found here point to a *different* account — i.e. this Contact is still shared)
+          → Choice
+              When #[sizeOf(payload default []) == 0]:
+                  → Set Variable: deletableContactIds = (vars.deletableContactIds default []) ++ [vars.candidateContactId]
+              Otherwise: (skip — still linked to another account via AccountContactRelation, leave it)
+      → Salesforce Delete (Contact, Ids = vars.deletableContactIds) → [Delete Result & Log Pattern → logEntries, object: "Contact"]
       → Salesforce Delete (Account_Status__c) → [Delete Result & Log Pattern → logEntries, object: "Account_Status__c"]
       → Salesforce Delete (Entity_Identifier__c) → [Delete Result & Log Pattern → logEntries, object: "Entity_Identifier__c"]
   → Choice
@@ -174,9 +191,11 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
    - Insert **between** step 6's query and the PartyAddress__c/Address__c deletes: `Salesforce Query: SELECT ParentId FROM Address__c WHERE Id IN (:addressIds)` (Parameters: `#[{addressIds: vars.addressIds}]`) → Transform Message: extract `ParentId` list → `Set Variable: locationIds`
    - Then, after Address__c is deleted (step 7): `Salesforce Delete (Location, Ids = vars.locationIds)`
    - Untested so far: this is the first place in the project binding a **list** into a SOQL `IN (...)` clause rather than a single scalar Id — the Key Notes above only cover single-value bind parameters not auto-quoting. Confirm the connector formats a bound List correctly for `IN (...)` before trusting this on a real delete run (test on a BiWeeklyPayroll account first — always exactly 2 Locations/Addresses, a reliable multi-value case).
-9. Account_Status__c (child of Account via Account_Status__c.Account__c) — added to delete flow
-10. Entity_Identifier__c (child of Account) — added to delete flow. Not created by the Mule load flow at all — it's auto-created by a Salesforce trigger (off Account creation, presumably), so it never appeared anywhere in the load design, but still needs cleanup on delete since it's still a real child record of Account
-11. (Account deletion TBD)
+9. **AccountContactRelation** (new, 2026-07-28) — child of Account (`AccountId`) and Contact (`ContactId`), created by the load flow's lookup-before-create restructure (section 2's `AddContacts`/`AddContactsPetroleum`/`AddContactsBiWeeklyPayroll`, see section 10) whenever a candidate matched an existing Contact instead of creating a new one. Queried via `SELECT Id FROM AccountContactRelation WHERE AccountId = :accountId` and deleted unconditionally — this account's relation to that Contact is gone regardless of whether the Contact itself gets deleted next.
+10. **Contact, conditionally** (new, 2026-07-28) — this delete flow exists primarily to let the user reset test data while iterating, so unlike everything else in this list, Contact deletion isn't "always delete every child" — a Contact might be legitimately shared across multiple test accounts via `AccountContactRelation` (that's the whole point of the lookup-before-create restructure), and deleting it out from under another account would be wrong. Rule: query `Contact WHERE AccountId = :accountId` (this account's *directly*-owned Contacts, not ones only related via `AccountContactRelation`), then for each one, query `AccountContactRelation WHERE ContactId = :candidateContactId` — since step 9 already deleted *this* account's own relation rows, any rows still found here point to a genuinely different account, meaning the Contact is still in use elsewhere and must be skipped. Only Contacts with **zero** remaining `AccountContactRelation` rows get deleted. Must run after step 9, not before, or every Contact would still show its own account's now-about-to-be-deleted relation row and never qualify.
+11. Account_Status__c (child of Account via Account_Status__c.Account__c) — added to delete flow
+12. Entity_Identifier__c (child of Account) — added to delete flow. Not created by the Mule load flow at all — it's auto-created by a Salesforce trigger (off Account creation, presumably), so it never appeared anywhere in the load design, but still needs cleanup on delete since it's still a real child record of Account
+13. (Account deletion TBD)
 
 ### Delete Result & Log Pattern (added 2026-07-22, apply after every Salesforce Delete above)
 Mirrors section 2's Create-side Result & Log Pattern, but Delete's connector response shape was confirmed empirically first rather than assumed — verified in Studio (`Logger: #[payload]` on a real InvoiceLine__c delete) to be:
