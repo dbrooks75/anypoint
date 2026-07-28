@@ -29,19 +29,29 @@ var expirationDateTime =
         (((licenseIssuedYear as Number) + 1) as String {format: "0"} ++ "-07-31T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null
 
+// PeriodStart/Issue_Date__c year (2026-07-28): Current -> 2026 if a 2026 deposit_date exists in
+// MercAR for this licenseno (same hasCurrentYearDeposit check as Expiration_Date__c above), else
+// 2025 — independent of license_issued, mirroring Expiration_Date__c's Current-branch pattern one
+// year earlier each time (Aug 2026-Jul 2027, or Aug 2025-Jul 2026). Historical -> unchanged,
+// still license_issued's own year.
+var periodStartYear =
+    if ((vars.row.SourceFileType default "") == "Current")
+        (if (hasCurrentYearDeposit) "2026" else "2025")
+    else licenseIssuedYear
+
 var periodStartDateTime =
-    if (licenseIssuedYear != "")
-        ((licenseIssuedYear as Number) as String {format: "0"} ++ "-08-01T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
+    if (periodStartYear != "")
+        ((periodStartYear as Number) as String {format: "0"} ++ "-08-01T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null
 
 // Issue_Date__c and Insurance_Policy_Issue_Date__c both = same date value as PeriodStart, but
 // plain Date (not DateTime) — 2026-07-28: Insurance_Policy_Issue_Date__c switched from date_issued
 // (a full M/d/yyyy date) to license_issued (year-only, same source as Expiration Date/Issue
-// Date/PeriodStart/PeriodEnd), so it just reuses this same August-1-of-license_issued anchor
+// Date/PeriodStart/PeriodEnd), so it just reuses this same August-1-of-periodStartYear anchor
 // instead of parsing its own separate date
 var periodStartDate =
-    if (licenseIssuedYear != "")
-        ((licenseIssuedYear as Number) as String {format: "0"} ++ "-08-01") as Date {format: "yyyy-MM-dd"}
+    if (periodStartYear != "")
+        ((periodStartYear as Number) as String {format: "0"} ++ "-08-01") as Date {format: "yyyy-MM-dd"}
     else null
 ---
 {
