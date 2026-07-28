@@ -15,6 +15,18 @@ fun parseName(raw: String) = do {
 fun cleanEmail(email: String) =
     if (email matches /^[^\s@]+@[^\s@]+\.[^\s@]+$/) email else ""
 
+// zip is an Access-exported numeric column, same leading-zero-loss/trailing-".0" risk as
+// jobno/ReferenceNumber elsewhere — strip any decimal artifact, then zero-pad back to 5 digits
+// (e.g. "2907" -> "02907"), 2026-07-28
+fun padZip(z) = do {
+    var stripped = (z default "" splitBy ".")[0]
+    var len = sizeOf(stripped)
+    ---
+    if (stripped == "") ""
+    else if (len < 5) ("00000"[0 to (4 - len)] ++ stripped)
+    else stripped
+}
+
 var companyContact = vars.row.CompanyContact default ""
 var parsedCompanyName = parseName(companyContact)
 
@@ -41,7 +53,7 @@ var riAgentPhone = vars.row.RIagentTel default ""
             MailingStreet: vars.row.RIagentAddr,
             MailingCity: vars.row.RIagentCity,
             MailingStateCode: vars.row.RIagentState,
-            MailingPostalCode: vars.row.RIagentZip,
+            MailingPostalCode: padZip(vars.row.RIagentZip),
             MailingCountryCode: "US"
         }
     else null

@@ -625,7 +625,13 @@ Invoices load oldest-first, sorted by `deposit_date` (not the pymt_type-derived 
 
 **Applied to Petroleum too (2026-07-28)**: `transform-address.dwl`'s fix already covered Petroleum's `Address__c` automatically (reused as-is, no separate Petroleum file — section 6's "Reused as-is, no Petroleum variant needed" note). Added the same `padZip` copy to `transform-account-petroleum.dwl` (`BillingPostalCode`) and `transform-bla-petroleum.dwl` (`SitePostalCode`), which each read `vars.row.zip` from `MercStd.csv`'s own `zip` column.
 
-**Not yet checked**: BiWeeklyPayroll (different column names — `CompanyZip`/`RIagentZip`/`CorpOfficeZip` — same numeric-export risk, not yet applied).
+**Applied to BiWeeklyPayroll too (2026-07-28)**: same `padZip` copy added to all four places its zip-equivalent columns are used —
+- `transform-account-biweeklypayroll.dwl` (`BillingPostalCode` ← `CompanyZip`)
+- `transform-address-biweeklypayroll.dwl` (`PostalCode` ← `CompanyZip` or `CorpOfficeZip`, whichever `isCompany` branch applies)
+- `transform-bla-biweeklypayroll.dwl` (`SitePostalCode` ← `CompanyZip`)
+- `transform-contact-biweeklypayroll.dwl` (`MailingPostalCode` ← `RIagentZip`, the RI agent's mailing address)
+
+`transform-partyaddress-biweeklypayroll.dwl` has no `zip`/`PostalCode` reference at all (checked, same as Jewelry/Petroleum's `PartyAddress__c` transforms) — nothing to fix there. All three work units are now fully covered for this bug.
 
 **`jobno` is now a Text field, not Number (2026-07-20)** — incoming data changed; for Jewelry every `jobno` starts with `"CS-"`, no other filter needed. `transform1-filter-and-name.dwl`/`transform-ar-filter-and-name.dwl` updated: filter is now `(row.jobno default "") matches /^CS-.+/` (was the numeric-positive-integer regex against a `.`-stripped value), and the `.`-stripping map/reassignment of `jobno` was dropped entirely since there's no more decimal-export artifact to clean on a Text column. **Confirmed (2026-07-20)**: `transform-bla.dwl`'s `ApplicationType: if (jobno[-2 to -1] == "01") "New" else "Renewal"` needs no change — the last-2-digit convention is unchanged, just now prefixed with `"CS-"` instead of being a bare number, and slicing the last 2 characters of the string works the same either way.
 
