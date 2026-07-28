@@ -2,18 +2,11 @@
 output application/java
 
 var licenseno = vars.row.licenseno default ""
-var issueDate = vars.row.date_issued default ""
 
 // Zero-pad licenseno to 7 digits for the Name (e.g. "123" -> "0000123")
 var licensenoDigits = licenseno as String
 var licensenoPaddedFull = "0000000" ++ licensenoDigits
 var licensenoPadded = licensenoPaddedFull[(sizeOf(licensenoPaddedFull) - 7) to (sizeOf(licensenoPaddedFull) - 1)]
-
-// Insurance_Policy_Issue_Date__c = date_issued, plain Date (not DateTime)
-var issueDateParsed =
-    if (issueDate != "")
-        (issueDate as Date {format: "M/d/yyyy"} as String {format: "yyyy-MM-dd"}) as Date {format: "yyyy-MM-dd"}
-    else null
 
 // PeriodStart = 8/01 of license_issued itself (e.g. license_issued 2026 -> 8/1/2026) - same year, no +1
 // license_issued is an Access-exported numeric year column, strip any trailing ".0" artifact same as other numeric columns
@@ -41,7 +34,11 @@ var periodStartDateTime =
         ((licenseIssuedYear as Number) as String {format: "0"} ++ "-08-01T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null
 
-// Issue_Date__c = same date value as PeriodStart, but plain Date (not DateTime)
+// Issue_Date__c and Insurance_Policy_Issue_Date__c both = same date value as PeriodStart, but
+// plain Date (not DateTime) — 2026-07-28: Insurance_Policy_Issue_Date__c switched from date_issued
+// (a full M/d/yyyy date) to license_issued (year-only, same source as Expiration Date/Issue
+// Date/PeriodStart/PeriodEnd), so it just reuses this same August-1-of-license_issued anchor
+// instead of parsing its own separate date
 var periodStartDate =
     if (licenseIssuedYear != "")
         ((licenseIssuedYear as Number) as String {format: "0"} ++ "-08-01") as Date {format: "yyyy-MM-dd"}
@@ -61,5 +58,5 @@ var periodStartDate =
             else "Expired",
     Legacy_License_Number__c: licenseno,
     Insurance_Company__c: vars.row.insurance_company,
-    Insurance_Policy_Issue_Date__c: issueDateParsed,
+    Insurance_Policy_Issue_Date__c: periodStartDate,
 }

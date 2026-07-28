@@ -984,9 +984,14 @@ For Each row: (Collection: #[vars.mercStdRows])
           transform-bla-petroleum.dwl's PrimaryOwnerId, same as before this restructure. Petroleum
           only ever produces 0 or 1 candidate, so the For Each runs at most once per row.)
 
+    → Transform Message (transform-vehicles-petroleum.dwl) → Set Variable: deliveryVehiclesJson =
+        payload (**moved here 2026-07-28** — must run before transform-aqr-questions-petroleum.dwl
+        below, which now reads vars.deliveryVehiclesJson for the PET_Delivery_Vehicles question;
+        previously ran deeper in this chain, ahead of the old AQR-creation step, which broke once
+        that step's logic moved into the new upfront transform below — see section 10)
     → Transform Message (transform-aqr-questions-petroleum.dwl — see section 10; resolves the
-        full per-question AQR answer list from vars.row/vars.aqvMap alone, doesn't need
-        assessmentId/blaId) → Set Variable: aqrQuestions = payload
+        full per-question AQR answer list from vars.row/vars.aqvMap/vars.deliveryVehiclesJson,
+        doesn't need assessmentId/blaId) → Set Variable: aqrQuestions = payload
     → Flow Reference: AddBusinessLicenseAppPetroleum
         → Transform Message (transform-bla-petroleum.dwl)
         → Salesforce Create Business License Application (AccountId = accountId, Records: #[[payload]])
@@ -1002,11 +1007,12 @@ For Each row: (Collection: #[vars.mercStdRows])
                 → Transform Message (transform-assessment-petroleum.dwl) → Salesforce Create Assessment
                   (linked to blaId, Records: #[[payload]]) → [Result & Log Pattern → logEntries,
                   object: "Assessment"; sets assessmentId]
-                → Transform Message (transform-vehicles-petroleum.dwl) → Set Variable:
-                  deliveryVehiclesJson = #[payload] (must run before the AQR transform below, which
-                  reads vars.deliveryVehiclesJson)
-                → Transform Message (transform-assessment-question-response-petroleum.dwl — uses
-                  vars.assessmentId, vars.aqvMap, vars.deliveryVehiclesJson; builds list of 6)
+                → Transform Message (transform-assessment-question-response-petroleum.dwl — see
+                  section 10; simplified 2026-07-28 to just map vars.aqrQuestions, which now
+                  carries the already-resolved PET_Delivery_Vehicles answer — the
+                  transform-vehicles-petroleum.dwl/deliveryVehiclesJson step that used to sit here
+                  moved earlier, ahead of AddBusinessLicenseAppPetroleum, see this section's Flow
+                  Structure above)
                 → Salesforce Create Assessment Question Response (Records: #[payload]) → [List Result
                   & Log Pattern → logEntries, object: "AssessmentQuestionResponse"]
                 → Transform Message (transform-contentnote-petroleum.dwl) → Salesforce Create
@@ -1227,6 +1233,7 @@ Everything not listed here (`transform-address.dwl`, `transform-location-results
   - **`PeriodStart` rule change (2026-07-15)**: no longer the same value as `Issue_Date__c` (was `date_issued`-derived, matching Jewelry). Now **8/01 of `license_issued`'s own year** (not +1 — confirmed: same year as `license_issued` itself, e.g. `license_issued` `2026` → `PeriodStart` `8/1/2026`), paired with `PeriodEnd`/`Expiration_Date__c` (see that field's own rule above for the current Current/Historical-branched logic), giving a normal Aug-to-Jul one-year license period. **Reconfirmed (2026-07-17)**, no change — still "same value as `Issue_Date__c`" (the two fields mirror each other, `Date` vs `DateTime`).
   - **`Issue_Date__c` rule change (2026-07-16, corrected)**: no longer `date_issued`-derived `DateTime` (that was the original Jewelry-copied rule, unchanged until now). Confirmed: `Issue_Date__c` is actually a plain **`Date`** field (not `DateTime`), and its value should equal **`PeriodStart`'s date** — same 8/01-of-`license_issued`'s-own-year rule, just `Date`-typed instead of `DateTime`-typed. Recomputed as its own `periodStartDate` var (built directly with `format: "yyyy-MM-dd"`, no separate zero-pad-reformat round trip needed since the format is controlled at construction time) rather than reusing `periodStartDateTime`, since `PeriodStart` itself must stay `DateTime`. `date_issued` is no longer used for this field at all — see `Insurance_Policy_Issue_Date__c` below for where `date_issued` moved to instead. **Reconfirmed (2026-07-17)**, no change — still "same value as `PeriodStart`".
   - **New fields (2026-07-15/16)**: `Insurance_Company__c` = `insurance_company` (plain passthrough, no parsing). `Insurance_Policy_Issue_Date__c` (2026-07-16) = `date_issued`, parsed as a plain `Date` (same zero-pad-reformat pattern as `Policy_Expiration_Date__c`/`Insurance_Policy_Issue_Date__c` fields elsewhere) — this field, along with the `Issue_Date__c` rule change above, was briefly built on `transform-bla-petroleum.dwl` (BLA) first before being corrected to belong here on BL instead. A matching `Insurance_Policy_Expiration_Date__c` was also attempted here but turned out to be a **formula field** on `BusinessLicense`/RegulatoryAuthorization, not settable via the connector — moved to `transform-bla-petroleum.dwl`'s `Policy_Expiration_Date__c` instead, see that bullet above.
+  - **`Insurance_Policy_Issue_Date__c` source changed (2026-07-28), supersedes the above**: no longer `date_issued`-derived. `date_issued` is a full `M/d/yyyy` date, but the correct source is actually `license_issued` — the same year-only column already anchoring `Expiration_Date__c`/`Issue_Date__c`/`PeriodStart`/`PeriodEnd`. Since all four (now five) of these fields share one source column, `Insurance_Policy_Issue_Date__c` just reuses the already-computed `periodStartDate` var (the same August-1-of-`license_issued`'s-year value as `Issue_Date__c`) instead of parsing `date_issued` separately — the `issueDate`/`issueDateParsed` vars were removed as dead code.
   - **`Name` number part is zero-padded to 7 digits** (2026-07-15): `licenseno` `123` → `Name: "PET-0000123"`, not `"PET-123"`. Implemented manually (`"0000000" ++ licenseno` then slice the last 7 chars via `sizeOf`-computed indices) rather than a stdlib pad function like `leftPad`. At the time this was written, the `some` call in `transform-bla-petroleum.dwl`'s Status logic had just failed with an unqualified call and no `import` — later diagnosed (see the ContentNote Base64 note in section 6) as needing an explicit `import * from dw::core::Arrays`/`dw::core::Strings`, not that these modules are unusable. **Revise if touching this again**: `licenseno as String` padded via `import leftPad from dw::core::Strings` would likely work fine now — this manual version isn't required, just untouched since it already works.
 - **`transform-assessment-petroleum.dwl`** — replaces `transform-assessment.dwl`; `date_issued` instead of `issue_date`, and `Name: "Universal License Assessment"` instead of Jewelry's `"Business License Assessment"`.
 - **`transform-vehicles-combine.dwl`** — joins the `01`/`02` truck file pairs on `licenseno` into one row per license; reused once for the Current pair and once for the Historical pair (see Vehicles Flow Structure above).
@@ -1929,6 +1936,8 @@ Today (sections 3 and 4), `AddInvoices` and `AddSentInvoice` run as two separate
 **Confirmed end to end (Petroleum, 2026-07-28)**: same two-file swap (`transform-bla-petroleum.dwl`/`transform-assessment-question-response-petroleum.dwl`) loaded into Studio and tested working.
 
 BiWeeklyPayroll's equivalent Transform Message updates (`transform-bla-biweeklypayroll.dwl`/`transform-assessment-question-response-biweeklypayroll.dwl`) not yet confirmed loaded.
+
+**Bug found and fixed (Petroleum, 2026-07-28)**: after loading the restructured Transform Messages, trucks stopped appearing in the `PET_Delivery_Vehicles` AQR answer. Root cause: `transform-vehicles-petroleum.dwl`'s `Set Variable: deliveryVehiclesJson` step was still in its pre-restructure location — deep inside `AddBusinessLicenseAppPetroleum`, ahead of the *old* AQR-creation step (section 6's original Flow Structure). Once `transform-aqr-questions-petroleum.dwl` moved earlier (before `AddBusinessLicenseAppPetroleum` runs at all) to read `vars.deliveryVehiclesJson` for that question, the vehicles step hadn't run yet at that point, so the variable was still `null`. **Fixed** by moving the vehicles step to run immediately before `transform-aqr-questions-petroleum.dwl` instead (see section 6's Flow Structure, updated). Confirmed working. **Same risk exists for Jewelry/BiWeeklyPayroll** if either has an upstream "compute once, stash in a var" step that used to run right before the old per-work-unit AQR transform and now needs to run before the new `aqrQuestions` step instead — worth double-checking both, though neither currently has an equivalent (Jewelry's AQR is all-null placeholders, BiWeeklyPayroll's only external input is `vars.row` fields already available at the top of the loop).
 
 ---
 
