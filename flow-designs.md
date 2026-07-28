@@ -616,6 +616,17 @@ Invoices load oldest-first, sorted by `deposit_date` (not the pymt_type-derived 
 
 **Recurring pattern — Access numeric columns export with a trailing `.00`.** Originally hit on the `jobno` decimal artifact (`transform1-filter-and-name.dwl`/`transform-ar-filter-and-name.dwl` — no longer applicable now that `jobno` is a Text field, see below), hit a second time on `Payment__c.ReferenceNumber__c` (sourced from `cash_recpt_no`/`mo_ord_no`, both Access numeric columns). Fix is the same each time: `(value default "" splitBy ".")[0]` to strip everything after the decimal point. Check any *other* field sourced from a numeric-typed Access column for this before assuming it's clean — it's cheap to apply defensively even where it turns out to be a no-op.
 
+**Hit a third time (2026-07-28) — `zip`, this time losing its *leading* zero, not just gaining a trailing one** (e.g. `"02907"` → `"2907"`), reported against Jewelry's `Address__c.PostalCode`. Same root cause (Access-exported numeric column), same three call sites as every other cross-object field sourced from `vars.row.zip` — fixed in all three at once, each with its own `padZip(z)` copy (matches this project's established "duplicate small helpers per file" convention, same as `stateNames`/`fixFein`):
+- `transform-address.dwl` → `PostalCode`
+- `transform2-account.dwl` → `BillingPostalCode`
+- `transform-bla.dwl` → `SitePostalCode`
+
+`padZip` strips any decimal artifact (`splitBy "."`, same as the pattern above) then zero-pads back to 5 digits if short.
+
+**Applied to Petroleum too (2026-07-28)**: `transform-address.dwl`'s fix already covered Petroleum's `Address__c` automatically (reused as-is, no separate Petroleum file — section 6's "Reused as-is, no Petroleum variant needed" note). Added the same `padZip` copy to `transform-account-petroleum.dwl` (`BillingPostalCode`) and `transform-bla-petroleum.dwl` (`SitePostalCode`), which each read `vars.row.zip` from `MercStd.csv`'s own `zip` column.
+
+**Not yet checked**: BiWeeklyPayroll (different column names — `CompanyZip`/`RIagentZip`/`CorpOfficeZip` — same numeric-export risk, not yet applied).
+
 **`jobno` is now a Text field, not Number (2026-07-20)** — incoming data changed; for Jewelry every `jobno` starts with `"CS-"`, no other filter needed. `transform1-filter-and-name.dwl`/`transform-ar-filter-and-name.dwl` updated: filter is now `(row.jobno default "") matches /^CS-.+/` (was the numeric-positive-integer regex against a `.`-stripped value), and the `.`-stripping map/reassignment of `jobno` was dropped entirely since there's no more decimal-export artifact to clean on a Text column. **Confirmed (2026-07-20)**: `transform-bla.dwl`'s `ApplicationType: if (jobno[-2 to -1] == "01") "New" else "Renewal"` needs no change — the last-2-digit convention is unchanged, just now prefixed with `"CS-"` instead of being a bare number, and slicing the last 2 characters of the string works the same either way.
 
 **`Status` no longer hardcoded to `"Approved"` (2026-07-27)** — `transform-bla.dwl` now sets `Business_License_Application__c.Status` via `if (vars.row.SourceFileType == "Current") "Draft" else "Approved"`. Deliberately simpler than Petroleum's equivalent rule (`transform-bla-petroleum.dwl`'s `Status`, see section 6 — an AR current-year-deposit check on top of the `SourceFileType` branch): Jewelry's version does **not** check `vars.arRows` for a current-year deposit before defaulting Current-sourced rows to `"Draft"`, by explicit choice, not an oversight.

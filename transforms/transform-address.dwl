@@ -8,6 +8,18 @@ var hasPOBox2 = (lower(add2) replace "." with "") contains "po box"
 var bothPopulated = (add1 != "") and (add2 != "")
 var isMailing = vars.addressType == "Mailing"
 
+// zip is an Access-exported numeric column, same leading-zero-loss/trailing-".0" risk as
+// jobno/ReferenceNumber elsewhere — strip any decimal artifact, then zero-pad back to 5 digits
+// (e.g. "2907" -> "02907"), 2026-07-28
+fun padZip(z) = do {
+    var stripped = (z default "" splitBy ".")[0]
+    var len = sizeOf(stripped)
+    ---
+    if (stripped == "") ""
+    else if (len < 5) ("00000"[0 to (4 - len)] ++ stripped)
+    else stripped
+}
+
 var street =
     if (bothPopulated and (hasPOBox1 or hasPOBox2))
         if (isMailing)
@@ -26,6 +38,6 @@ var street =
     Street: street,
     City: vars.row.city default "",
     StateCode: vars.row.state default "",
-    PostalCode: vars.row.zip default "",
+    PostalCode: padZip(vars.row.zip),
     Country: "United States"
 }

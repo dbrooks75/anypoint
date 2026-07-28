@@ -3,6 +3,18 @@ output application/java
 
 var licenseno = vars.row.licenseno default ""
 
+// zip is an Access-exported numeric column, same leading-zero-loss/trailing-".0" risk as
+// jobno/ReferenceNumber elsewhere — strip any decimal artifact, then zero-pad back to 5 digits
+// (e.g. "2907" -> "02907"), 2026-07-28
+fun padZip(z) = do {
+    var stripped = (z default "" splitBy ".")[0]
+    var len = sizeOf(stripped)
+    ---
+    if (stripped == "") ""
+    else if (len < 5) ("00000"[0 to (4 - len)] ++ stripped)
+    else stripped
+}
+
 var matchingArRows = vars.mercArRows filter (row) -> (row.licenseno default "") == licenseno
 
 var latestArRow = if (sizeOf(matchingArRows) > 0)
@@ -87,6 +99,6 @@ var omniJsonData = write(
     SiteStreet: mailingStreet,
     SiteCity: vars.row.city default "",
     SiteStateCode: vars.row.state default "",
-    SitePostalCode: vars.row.zip default "",
+    SitePostalCode: padZip(vars.row.zip),
     SiteCountryCode: "US"
 }

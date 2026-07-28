@@ -9,6 +9,18 @@ fun fixFein(fein: String) = do {
     else stripped
 }
 
+// zip is an Access-exported numeric column, same leading-zero-loss/trailing-".0" risk as
+// jobno/ReferenceNumber elsewhere — strip any decimal artifact, then zero-pad back to 5 digits
+// (e.g. "2907" -> "02907"), 2026-07-28
+fun padZip(z) = do {
+    var stripped = (z default "" splitBy ".")[0]
+    var len = sizeOf(stripped)
+    ---
+    if (stripped == "") ""
+    else if (len < 5) ("00000"[0 to (4 - len)] ++ stripped)
+    else stripped
+}
+
 var businessEntityTypes = {
     "I": "Sole Proprietorship",
     "S": "Sole Proprietorship",
@@ -44,7 +56,7 @@ var stateNames = {
                    (if ((vars.row.add2 default "") != "") " " ++ (vars.row.add2 default "") else ""),
     BillingCity: vars.row.city,
     BillingState: stateNames[vars.row.state default ""] default (vars.row.state default ""),
-    BillingPostalCode: vars.row.zip,
+    BillingPostalCode: padZip(vars.row.zip),
     Preferred_Method_of_Comm__c: "Mail",
     Conversion_Identifier__c: "R1-Conversion"
 }
