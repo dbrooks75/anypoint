@@ -518,6 +518,9 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
             (`vars.contactId` still ends up holding the same thing it always did — the first
             candidate's resolved Id, i.e. the `respparty1`-based one if present, for
             transform-bla.dwl's PrimaryOwnerId — just now sourced from either a match or a create)
+      → Transform Message (transform-aqr-questions.dwl — see section 10; resolves the full
+          per-question AQR answer list from vars.row/vars.aqvMap alone, doesn't need
+          assessmentId/blaId) → Set Variable: aqrQuestions = payload
       → Flow Reference: AddBusinessLicenseApp
           (transform-bla.dwl new fields, 2026-07-17: `PrimaryOwnerId` = `vars.contactId` above;
           `SiteStreet`/`SiteCity`/`SiteStateCode`/`SitePostalCode`/`SiteCountryCode` = the Mailing
@@ -981,6 +984,9 @@ For Each row: (Collection: #[vars.mercStdRows])
           transform-bla-petroleum.dwl's PrimaryOwnerId, same as before this restructure. Petroleum
           only ever produces 0 or 1 candidate, so the For Each runs at most once per row.)
 
+    → Transform Message (transform-aqr-questions-petroleum.dwl — see section 10; resolves the
+        full per-question AQR answer list from vars.row/vars.aqvMap alone, doesn't need
+        assessmentId/blaId) → Set Variable: aqrQuestions = payload
     → Flow Reference: AddBusinessLicenseAppPetroleum
         → Transform Message (transform-bla-petroleum.dwl)
         → Salesforce Create Business License Application (AccountId = accountId, Records: #[[payload]])
@@ -1499,7 +1505,12 @@ Built `transform-bla-biweeklypayroll.dwl` and `transform-business-license-biweek
 **New fields (2026-07-17)**: `PrimaryOwnerId` = `vars.contactId` (the first created Contact's Id — Company Contact if present, before the RI Agent — see `AddContactsBiWeeklyPayroll`'s new `Set Variable: contactId` step above). `SiteStreet`/`SiteCity`/`SiteStateCode`/`SitePostalCode`/`SiteCountryCode` = the Mailing address — **no PO-Box-detection logic needed here**, unlike Jewelry/Petroleum, since BiWeeklyPayroll's `CompanyAddr` is a single field with no add1/add2 split (`CompanyAddr`/`CompanyCity`/`CompanyState`/`CompanyZip` map straight across). Field names confirmed via Workbench for Petroleum (section 6) — same names assumed to apply here since it's the same `Business_License_Application__c` object.
 
 ### BLA/BusinessLicense Flow Structure (nested inside `AddBusinessLicenseAppBiWeeklyPayroll`, same shape as Jewelry/Petroleum section 2/6)
+In the main per-row sequence, this is preceded by the same `aqrQuestions` step Jewelry/Petroleum
+use (section 10) — right after `AddContactsBiWeeklyPayroll` finishes, before this Flow Reference:
 ```
+Transform Message (transform-aqr-questions-biweeklypayroll.dwl — see section 10; resolves the
+    full per-question AQR answer list from vars.row/vars.aqvMap alone, doesn't need
+    assessmentId/blaId) → Set Variable: aqrQuestions = payload
 Flow Reference: AddBusinessLicenseAppBiWeeklyPayroll
   → Transform Message (transform-bla-biweeklypayroll.dwl)
   → Salesforce Create Business License Application (AccountId = accountId, Records: #[[payload]])
@@ -1904,10 +1915,15 @@ Today (sections 3 and 4), `AddInvoices` and `AddSentInvoice` run as two separate
 4. **`value` resolution** — generic priority-order check across the four typed fields (`dateValue` → `integerValue` → `choiceValue` → `responseText`, first non-`null` wins), not hand-authored per question. Safe because each question only ever populates one of the four (confirmed by inspecting all three existing AQR transforms) and DataWeave's `!= null` correctly treats `false`/`0` as present, not absent — so Checkbox answers that are genuinely `false` still resolve correctly instead of falling through as unanswered.
 5. **MultiSelect reshaping** — Salesforce's `ChoiceValue` on the AQR record needs the semicolon-joined string form (e.g. BiWeeklyPayroll's `"Check; Direct Deposit"`, from `normalizePaymentMethods`'s `joinBy "; "`), but the JSON needs a real array (`["Check", "Direct Deposit"]`, per the confirmed example shape). Each `transform-bla*.dwl`'s new `jsonValue()` helper splits on `"; "` only when `dataType == "MultiSelect"` — the AQR-creation transform is untouched and keeps the joined-string form. **Unconfirmed**: the `"; "` delimiter assumption, since only BiWeeklyPayroll's `Payment Method` question currently produces a MultiSelect-shaped answer to test against.
 
-### Studio changes still needed
+### Studio changes (all applied, 2026-07-28)
 - ~~Add `DataType` to all three `InitAssessmentQuestionVersion*` SOQL queries.~~ — done, 2026-07-27.
-- Insert a new **Transform Message + Set Variable: `aqrQuestions`** step in each work unit's per-row flow, placed after `Set Variable: row = payload` (and after the once-only `InitAssessmentQuestionVersion*` has run) but **before** `AddBusinessLicenseApp*` is called — the three new `transform-aqr-questions*.dwl` files are the transform for that step. **Not yet applied in Studio.**
+- Insert a new **Transform Message + Set Variable: `aqrQuestions`** step in each work unit's per-row flow, placed after `Set Variable: row = payload` (and after the once-only `InitAssessmentQuestionVersion*` has run) but **before** `AddBusinessLicenseApp*` is called — the three new `transform-aqr-questions*.dwl` files are the transform for that step.
+  - ~~Jewelry~~ — done, loaded and tested in Studio, 2026-07-28.
+  - ~~Petroleum~~ — done, loaded and tested in Studio, 2026-07-28.
+  - ~~BiWeeklyPayroll~~ — done, loaded and tested in Studio, 2026-07-28.
 - No other flow reordering needed — `AddBusinessLicenseApp*`'s existing BLA → BusinessLicense/Assessment/AQR chain is otherwise unchanged, just now reading `vars.aqrQuestions` instead of rebuilding it inline at AQR-creation time.
+
+**Confirmed end to end (Jewelry, 2026-07-28)**: updated `transform-bla.dwl`/`transform-assessment-question-response.dwl` Transform Message scripts loaded into Studio, BLA created successfully, `Omni_JSON_Data__c` populated with the expected `AnswerList` JSON. Petroleum/BiWeeklyPayroll's equivalent Transform Message updates not yet confirmed loaded — same two-file swap (`transform-bla-petroleum.dwl`/`transform-assessment-question-response-petroleum.dwl`, `transform-bla-biweeklypayroll.dwl`/`transform-assessment-question-response-biweeklypayroll.dwl`) still needed there.
 
 ---
 
