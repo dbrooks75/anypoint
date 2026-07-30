@@ -485,6 +485,12 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
                   → Transform Message (transform-account-status.dwl — filters the pre-parsed vars.arRows to rows matching vars.row.jobno, takes the oldest deposit_date among them; see section 5)
                   → Salesforce Create Account_Status__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "Account_Status__c"]
               Otherwise: (skip — Account failed, Account_Status__c not attempted)
+      → Choice (**new outer gate, 2026-07-29** — everything below, through the end of
+          AddBusinessLicenseApp, used to run unconditionally regardless of whether Account creation
+          actually succeeded; Salesforce happily let Location/Address__c/PartyAddress__c/Contact/
+          BLA/BusinessLicense/Assessment/AQR all get created with a null AccountId, since none of
+          those fields are required. Same fix as Petroleum's equivalent gate, section 6.)
+          When #[vars.accountId != null]:
       → Flow Reference: AddLocationsAndAddresses
           → Transform Message: build location array (transform-location.dwl — 1 or 2 items)
           → Set Variable: locationList = payload   (save before Create overwrites it)
@@ -572,6 +578,8 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
                   → Transform Message (transform-assessment-question-response.dwl — uses vars.assessmentId, vars.aqvMap; builds list of 7)
                   → Salesforce Create Assessment Question Response (Records: #[payload]) → [List Result & Log Pattern → logEntries, object: "AssessmentQuestionResponse"]
               Otherwise: (skip — BLA failed, BL/Assessment/AQR not attempted)
+          Otherwise: (skip row entirely — Account failed, Location/Address/PartyAddress/Contact/
+              BLA/BusinessLicense/Assessment/AQR not attempted)
   → File Write: C:\data\bla_jobno_map.csv (overwrite, content = vars.blaJobnoLog as CSV — debug/audit artifact; the labor_ar join below uses vars.blaJobnoLog directly in memory, no read-back needed)
 
   → Flow Reference: AddInvoices (no input needed — reads vars.arRows directly)
@@ -967,6 +975,18 @@ For Each row: (Collection: #[vars.mercStdRows])
                   Pattern → logEntries, object: "Account_Status__c"]
             Otherwise: (skip)
 
+    → Choice (**new outer gate, applied and confirmed in Studio for all three work units,
+        2026-07-29** — everything below, through the end of AddBusinessLicenseAppPetroleum, used to
+        run unconditionally regardless of whether Account creation actually succeeded; Salesforce
+        happily let Location/Address__c/PartyAddress__c/Contact/BLA/BusinessLicense/Assessment/AQR
+        all get created with a null AccountId, since none of those fields are required. Same fix
+        applied to Jewelry's equivalent gate (section 2, wrapping `AddLocationsAndAddresses`
+        onward) and to BiWeeklyPayroll's main per-row sequencing. Each unit's `Cleanup*` sub-flow
+        (import_log.csv write + processed-file archiving) is unaffected — it's called once after
+        the whole `For Each` completes, not per-row, so it still always runs regardless of any
+        individual row's Account/downstream outcomes.)
+        When #[vars.accountId != null]:
+
     → Flow Reference: AddLocationsAndAddressesPetroleum
         → Transform Message (transform-location-petroleum.dwl — 1 or 2 items)
         → Set Variable: locationList = payload
@@ -1082,6 +1102,8 @@ For Each row: (Collection: #[vars.mercStdRows])
                           & Log Pattern → logEntries, object: "ContentDocumentLink"]
                     Otherwise: (skip — ContentNote failed)
             Otherwise: (skip — BLA failed, BL/Assessment/AQR/ContentNote not attempted)
+        Otherwise: (skip row entirely — Account failed, Location/Address/PartyAddress/Contact/
+            BLA/BusinessLicense/Assessment/AQR/ContentNote not attempted)
 ```
 **Update (2026-07-14)**: `import_log.csv`/processed-file-archiving now built as a separate **`CleanupPetroleum`** sub-flow, called at the very end of the main flow (after the `For Each`, `AddInvoicesPetroleum`, **and now `AddSentInvoicePetroleum`** — see below — all complete) — kept as its own named sub-flow rather than inline steps at the tail of the main flow body, for the same "one responsibility per sub-flow" reasoning as `AddAccount`/`AddContacts`/etc. Contains: Set Variable `logFilename` (built once, timestamped — see note below), then File Write `#[vars.logFilename]` (`vars.logEntries as CSV`), then File Move `MercStd.csv`/`MercAR.csv`/all 4 truck files → `C:\data\processed\`, done last so a mid-flow error leaves source files in place for retry. ~~**TODO**: Jewelry doesn't have this yet either~~ — done (2026-07-20): Jewelry now has its own `CleanupJewelry` sub-flow, same pattern (`LaborStd.csv`/`LaborAR.csv` archiving).
 
@@ -1845,6 +1867,8 @@ On New or Updated File (C:\data\, LoadReadyFlagBiWeeklyPayroll.csv)
                   → Salesforce Create Account_Status__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "Account_Status__c"]
               Otherwise: (skip — Account failed, Account_Status__c not attempted)
 ```
+
+**New outer gate, confirmed in Studio, 2026-07-29**: same fix as Jewelry (section 2) and Petroleum (section 6) — `AddLocationsAndAddressesBiWeeklyPayroll`/`AddContactsBiWeeklyPayroll`/`AddBusinessLicenseAppBiWeeklyPayroll` (documented separately below, not as one contiguous trace) now only run `When #[vars.accountId != null]`, instead of unconditionally. `CleanupBiWeeklyPayroll` is unaffected, same as the other two units — it runs once after the whole `For Each` completes, not per-row.
 
 ### Account Status (`transform-account-status-biweeklypayroll.dwl`, resolved 2026-07-21)
 No `arRows`/history-style join needed here (unlike Jewelry/Petroleum) — this work unit has no AR/invoice data at all, and the source file is already one-row-per-job, so `Effective_Date__c` reads straight off the current row instead of filtering/sorting a separate collection.
