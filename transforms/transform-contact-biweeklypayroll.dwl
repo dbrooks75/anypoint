@@ -29,6 +29,7 @@ fun padZip(z) = do {
 
 var companyContact = vars.row.CompanyContact default ""
 var parsedCompanyName = parseName(companyContact)
+var companyPhone = vars.row.CompanyTel default ""
 
 var riAgentName = vars.row.RIagentName default ""
 var riAgentPhone = vars.row.RIagentTel default ""
@@ -41,7 +42,8 @@ var riAgentPhone = vars.row.RIagentTel default ""
             LastName: parsedCompanyName.lastName,
             Email: cleanEmail(vars.row.Email default ""),
             Title: vars.row.CompanyContactTitle,
-            AccountId: vars.accountId
+            AccountId: vars.accountId,
+            Phone: companyPhone
         }
     else null,
     if (riAgentName != "")
@@ -49,7 +51,7 @@ var riAgentPhone = vars.row.RIagentTel default ""
             LastName: riAgentName,
             Title: "RI Agent",
             AccountId: vars.accountId,
-            Phone: if (riAgentPhone != "") riAgentPhone else "(999) 999-9999",
+            Phone: riAgentPhone,
             MailingStreet: vars.row.RIagentAddr,
             MailingCity: vars.row.RIagentCity,
             MailingStateCode: vars.row.RIagentState,

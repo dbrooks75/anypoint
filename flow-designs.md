@@ -197,7 +197,7 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
 1. Payment__c (child of Invoice__c via Payment__c.Invoice__c)
 2. InvoiceLine__c (child of Invoice__c via InvoiceLine__c.Invoice__c)
 3. Invoice__c
-4. **ContentNote** (new, 2026-07-16, Petroleum only so far — see note below) — looked up via `ContentDocumentLink.LinkedEntityId = blaId`, not `Account__c` directly. **Correction**: the delete flow already had a `Business_License_Application__c WHERE Account__c = :accountId` query and a per-BLA delete loop before this — the new ContentNote steps just slot into that existing loop (before the existing BLA delete), not a brand-new lookup as originally assumed here.
+4. **ContentNote** (new, 2026-07-16, Petroleum; added to BiWeeklyPayroll 2026-08-01 — see note below) — looked up via `ContentDocumentLink.LinkedEntityId = blaId`, not `Account__c` directly. **Correction**: the delete flow already had a `Business_License_Application__c WHERE Account__c = :accountId` query and a per-BLA delete loop before this — the new ContentNote steps just slot into that existing loop (before the existing BLA delete), not a brand-new lookup as originally assumed here.
 5. Business_License_Application__c (pre-existing, already handled — not a gap as previously assumed in this doc)
 6. **PartyAddress__c** (undocumented until now — already built in Studio) — child of both Account (`PartyId`) and Address__c (`AddressId__c`). Query: `SELECT Id, AddressId__c FROM PartyAddress__c WHERE PartyId = :accountId` → `Set Variable: partyAddressIds` (extracted `Id` list), `Set Variable: addressIds` (extracted `AddressId__c` list). Deleted right before Address__c.
 7. Address__c (child of Location via Address__c.ParentId) — `Salesforce Delete (Address__c, Ids = vars.addressIds)`, using the `addressIds` captured in step 6.
@@ -1408,8 +1408,8 @@ Built `transform-account-biweeklypayroll.dwl` (new file) implementing this — `
 
 Not yet covered here: `RIagent*` block (still open — likely a Contact, not confirmed).
 
-### Location / Address__c field mapping (confirmed 2026-07-12/13)
-Unlike Jewelry/Petroleum's Mailing/Physical PO-Box-driven split, BiWeeklyPayroll always creates **exactly two** Location/Address__c pairs per row, sourced from two different address blocks:
+### Location / Address__c field mapping (confirmed 2026-07-12/13; Corporate made optional 2026-08-01)
+Unlike Jewelry/Petroleum's Mailing/Physical PO-Box-driven split, BiWeeklyPayroll creates **up to two** Location/Address__c pairs per row, sourced from two different address blocks — Company is always created; Corporate is skipped entirely if blank (see below).
 
 **Location 1 — "Company"** (from `Company*`):
 | Field | Value |
@@ -1429,7 +1429,7 @@ Unlike Jewelry/Petroleum's Mailing/Physical PO-Box-driven split, BiWeeklyPayroll
 | `PostalCode` | `CompanyZip` |
 | `Country` | `"United States"` (matches Jewelry/Petroleum's `Country`/`"United States"` pattern — **not** a `CountryCode`/`"US"` field, corrected 2026-07-13) |
 
-**Location 2 — "Corporate"** (from `CorpOffice*`, corrected 2026-07-13 — user's first pass said `Name = "Company"` for this one too, confirmed should be `"Corporate"`):
+**Location 2 — "Corporate"** (from `CorpOffice*`, corrected 2026-07-13 — user's first pass said `Name = "Company"` for this one too, confirmed should be `"Corporate"`; **skipped if blank, added 2026-08-01** — `CorpOfficeAddr` is the driving field, same "skip if blank" pattern as BiWeeklyPayroll's Contact section below (`CompanyContact`/`RIagentName`); when blank, neither Location 2 nor its Address/PartyAddress__c rows are created at all — Company is unaffected and always created):
 | Field | Value |
 |---|---|
 | `LocationType` | `"Business Site"` |
@@ -1450,7 +1450,7 @@ Unlike Jewelry/Petroleum's Mailing/Physical PO-Box-driven split, BiWeeklyPayroll
 **`AddressType`/`Address_Type__c` confirmed (2026-07-13)**: both Locations get `"Physical"` for now — user's words: "that may change later," so treat as a placeholder, not a final business rule. This means `AddressType` is no longer what distinguishes "Company" from "Corporate" the way `"Mailing"`/`"Physical"` did in Jewelry/Petroleum — that distinction is now carried by `Location.Name`/`vars.locationName` instead ("Company" vs "Corporate"), used purely to pick which source columns (`Company*` vs `CorpOffice*`) feed the Address.
 
 Built three new transforms:
-- `transform-location-biweeklypayroll.dwl` — always returns both Locations (no PO-Box-driven conditional like Jewelry/Petroleum), `Description` uses `RID` instead of `jobno`/`licenseno`.
+- `transform-location-biweeklypayroll.dwl` — always returns the Company Location; returns the Corporate Location only `if (vars.row.CorpOfficeAddr default "") != ""` (filtered out otherwise, 2026-08-01) — no PO-Box-driven conditional like Jewelry/Petroleum, `Description` uses `RID` instead of `jobno`/`licenseno`. Downstream (`transform-location-results-biweeklypayroll.dwl`'s `vars.locationList[idx]` indexing, and the per-location `Address__c`/`PartyAddress__c` creates in the Flow Structure below) needed no changes — a skipped Corporate Location simply never appears in `locationList`/`locationResults`, so its Address/PartyAddress__c never get attempted.
 - `transform-location-results-biweeklypayroll.dwl` — BiWeeklyPayroll equivalent of `transform-location-results.dwl`; returns `locationName` (`Location.Name`, "Company"/"Corporate") instead of `addressType`, since the picklist value no longer varies. In Studio, the inner `For Each` sets `vars.locationName` from this and separately sets `vars.addressType = "Physical"` as a hardcoded constant (not derived).
 - `transform-address-biweeklypayroll.dwl` — branches `Street`/`City`/`StateCode`/`PostalCode` on `vars.locationName == "Company"` (→ `Company*` columns) vs. else (→ `CorpOffice*` columns); `AddressType` is `vars.addressType` (the hardcoded `"Physical"`); `Country: "United States"` (confirmed, not `CountryCode`).
 
@@ -1494,7 +1494,7 @@ Two independent Contacts per row (not gated on each other), each skipped entirel
 | `Email` | `Email` | Invalid-format-→-empty-string rule applies here (confirmed 2026-07-13 this belongs to Contact, not Account) — validated against `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`, blanked if it doesn't match |
 | `Title` | `CompanyContactTitle` | |
 | `AccountId` | `vars.accountId` | |
-| `Phone` | — | **Not set** for this contact — confirmed 2026-07-13, Phone only applies to the RI contact below |
+| `Phone` | `CompanyTel` | Added 2026-07-31, same pattern as the RI contact's `RIagentTel` → `Phone` below — supersedes the earlier 2026-07-13 "Not set" note. No default; blank `CompanyTel` yields empty string |
 
 **RI contact** (skipped if `RIagentName` is blank):
 | Field | Source | Notes |
@@ -1502,7 +1502,7 @@ Two independent Contacts per row (not gated on each other), each skipped entirel
 | `LastName` | `RIagentName` | **No parsing** — unlike the Company contact, `RIagentName` is often a company name rather than a person's name, so the whole value goes to `LastName` as-is, no `FirstName`/`MiddleName` split |
 | `Title` | — | Hardcoded `"RI Agent"` |
 | `AccountId` | `vars.accountId` | |
-| `Phone` | `RIagentTel` | Defaults to `"(999) 999-9999"` if blank |
+| `Phone` | `RIagentTel` | No default (as of 2026-07-31) — Phone is no longer a required field, so blank `RIagentTel` yields empty string rather than the earlier `"(999) 999-9999"` placeholder |
 | `MailingStreet` | `RIagentAddr` | |
 | `MailingCity` | `RIagentCity` | |
 | `MailingStateCode` | `RIagentState` | |
@@ -1618,9 +1618,18 @@ Flow Reference: AddBusinessLicenseAppBiWeeklyPayroll
           → Transform Message (transform-business-license-biweeklypayroll.dwl)
           → Salesforce Create Business License (Records: #[[payload]])
               → [Result & Log Pattern → logEntries, object: "BusinessLicense"]
-      Otherwise: (skip — BLA failed, Business License/Assessment/AQR not attempted)
+          → Transform Message (transform-contentnote-biweeklypayroll.dwl) → Salesforce Create
+            ContentNote (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+            object: "ContentNote"; sets contentNoteId]
+          → Choice
+              When #[vars.contentNoteId != null]:
+                  → Transform Message (transform-contentdocumentlink-biweeklypayroll.dwl) →
+                    Salesforce Create ContentDocumentLink (Records: #[[payload]]) → [Result
+                    & Log Pattern → logEntries, object: "ContentDocumentLink"]
+              Otherwise: (skip — ContentNote failed)
+      Otherwise: (skip — BLA failed, Business License/Assessment/AQR/ContentNote not attempted)
 ```
-Note: unlike Jewelry/Petroleum, there's no `AddInvoices`-equivalent needing `blaRidLog` later (Invoice__c/Payment__c out of scope, see the correction at the top of this section) — but the log is still useful for the eventual Note object (details TBD) and general audit/debugging, so it's kept.
+Note: unlike Jewelry/Petroleum, there's no `AddInvoices`-equivalent needing `blaRidLog` later (Invoice__c/Payment__c out of scope, see the correction at the top of this section) — but the log is still useful for ContentNote/ContentDocumentLink creation (both nested in this same Choice block, same shape as Petroleum's `AddBusinessLicenseAppPetroleum`, section 6) and general audit/debugging, so it's kept.
 
 **Naming note (2026-07-14)**: this variable is called `blaRidLog` (RID-keyed), deliberately distinct from Jewelry's `blaJobnoLog` and Petroleum's `blaLicenseLog` — same "keep each work unit's variable names distinct even when the shape is identical" preference already established between Jewelry and Petroleum.
 
@@ -1831,10 +1840,22 @@ fun normalizeDayValue(raw) = do {
 }
 ```
 
-### Note object (confirmed 2026-07-12 — new, not present in Jewelry/Petroleum)
-BiWeeklyPayroll loads a **Note** object instead of Invoice__c/InvoiceLine__c/Payment__c (which this unit doesn't touch at all, per the correction above). Field mapping/details not yet provided — user will supply after the rest of the flow (Account/Location/Address/Contact/BLA/BusinessLicense/Assessment/AQR) is designed.
+### ContentNote (decided 2026-08-01 — supersedes the earlier Note-object plan below)
+BiWeeklyPayroll loads a **ContentNote** (standard object, same as Petroleum's — see section 6) instead of the plain **Note** object originally planned (2026-07-12) and instead of Invoice__c/InvoiceLine__c/Payment__c (which this unit doesn't touch at all, per the correction above).
 
-**Update (2026-07-14)**: with the main BiWeeklyPayroll chain and `CleanupBiWeeklyPayroll` both confirmed working, Note is the last piece for this work unit. User is starting the Note design/build on **Petroleum** first, not BiWeeklyPayroll — **not yet confirmed whether this means Note is now in scope for Petroleum too** (a scope addition beyond what's documented in section 6, which never mentioned Note), or whether Petroleum is just being used as the build/prototype location before porting the design to BiWeeklyPayroll. Check which before assuming Petroleum's scope has changed.
+- `transform-contentnote-biweeklypayroll.dwl` (new file, 2026-08-01) — builds `ContentNote`: `Title: "Bi-Weekly Conversion"`, `Content` = raw HTML string built from `vars.row.ClassificationInvolved`, one `<p>` tag — `"Classification Involved: " ++ classificationInvolved`. Same "no Base64 encoding needed" behavior applies as Petroleum's `transform-contentnote-petroleum.dwl` (`ContentNote.Content` is a rich-text field, connector encodes it automatically).
+- `transform-contentdocumentlink-biweeklypayroll.dwl` (new file, 2026-08-01) — builds `ContentDocumentLink`: `ContentDocumentId: vars.contentNoteId` (Id from the just-created ContentNote), `LinkedEntityId: vars.blaId`, `ShareType: "V"`, `Visibility: "InternalUsers"` — identical shape to Petroleum's `transform-contentdocumentlink-petroleum.dwl`, linked to the BLA (`blaId`), not the Account.
+- Gated on `vars.contentNoteId != null` (Choice, same failed-parent-skip pattern as Business License being gated on `blaId`), nested inside `AddBusinessLicenseAppBiWeeklyPayroll` after the Business License create step — see Flow Structure above.
+- Not yet built/tested in Studio.
+
+<details>
+<summary>Superseded — original Note-object plan (2026-07-12 through 2026-07-14, never implemented)</summary>
+
+BiWeeklyPayroll was originally going to load a **Note** object instead of Invoice__c/InvoiceLine__c/Payment__c. Field mapping/details were never provided — the user was going to supply them after the rest of the flow was designed.
+
+**Update (2026-07-14)**: with the main BiWeeklyPayroll chain and `CleanupBiWeeklyPayroll` both confirmed working, Note was the last piece for this work unit. User started the Note design/build on **Petroleum** first, not BiWeeklyPayroll, which is what became the ContentNote pattern documented in section 6 and now reused above — the plain Note object was dropped in favor of ContentNote before any BiWeeklyPayroll-specific Note field mapping was ever defined.
+
+</details>
 
 ### Building in Studio (started 2026-07-12) — from scratch, like Petroleum
 Per lesson 7 in [[project_anypoint_salesforce_connectivity]], **do not** raw-copy `Petroleum.xml`/`Jewelry.xml` to start this flow — Studio treats copied flow files as linked. Build `BiWeeklyPayroll.xml` fresh in the Studio GUI instead.
@@ -1902,7 +1923,7 @@ Set Variable: accountRecordTypeId = #[payload[0].Id]
 
 **Main per-row chain now fully confirmed working end to end**: Account → Account_Status__c → Location → Address__c → PartyAddress__c → Contact → BLA → BusinessLicense → Assessment → AQR (all 13 questions).
 
-**Confirmed wired (2026-07-29)** — corrects the "not yet wired" note this superseded: `Account_Status__c` (`Effective_Date__c` ← `DateRecd`, `Status__c` hardcoded `"Active"` — see "Account Status" above) is built as part of `AddAccountBiWeeklyPayroll`, same nested-in-AddAccount shape as Jewelry/Petroleum (section 5's `AddAccount`, section 6's `AddAccountPetroleum`) — all three work units now consistently have `Account_Status__c` creation nested inside their own `AddAccount*` sub-flow, not a separate step. The Note object (details still deferred by the user until everything else is done) is the only other thing left in this work unit.
+**Confirmed wired (2026-07-29)** — corrects the "not yet wired" note this superseded: `Account_Status__c` (`Effective_Date__c` ← `DateRecd`, `Status__c` hardcoded `"Active"` — see "Account Status" above) is built as part of `AddAccountBiWeeklyPayroll`, same nested-in-AddAccount shape as Jewelry/Petroleum (section 5's `AddAccount`, section 6's `AddAccountPetroleum`) — all three work units now consistently have `Account_Status__c` creation nested inside their own `AddAccount*` sub-flow, not a separate step. ContentNote (see "ContentNote" above, decided 2026-08-01, supersedes the earlier deferred Note-object plan) is the only other thing left in this work unit.
 
 ### Cleanup: `CleanupBiWeeklyPayroll` sub-flow (confirmed working in Studio, 2026-07-14)
 Following the same "separate named sub-flow" pattern just established for Petroleum's `CleanupPetroleum` (rather than inline steps at the tail of the main flow body) — called at the very end of the main flow, after the `For Each` completes:
