@@ -10,5 +10,6 @@ var oldestDepositDate = if (sizeOf(matchingRows) > 0)
 {
     Account__c: vars.accountId,
     Effective_Date__c: if ((oldestDepositDate default "") != "") oldestDepositDate as Date {format: "M/d/yyyy"} else null,
-    Status__c: "Active"
+    Status__c: "Active",
+    OwnerId: vars.ownerId
 }

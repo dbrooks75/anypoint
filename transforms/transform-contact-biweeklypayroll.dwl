@@ -43,7 +43,8 @@ var riAgentPhone = vars.row.RIagentTel default ""
             Email: cleanEmail(vars.row.Email default ""),
             Title: vars.row.CompanyContactTitle,
             AccountId: vars.accountId,
-            Phone: companyPhone
+            Phone: companyPhone,
+            OwnerId: vars.ownerId
         }
     else null,
     if (riAgentName != "")
@@ -56,7 +57,8 @@ var riAgentPhone = vars.row.RIagentTel default ""
             MailingCity: vars.row.RIagentCity,
             MailingStateCode: vars.row.RIagentState,
             MailingPostalCode: padZip(vars.row.RIagentZip),
-            MailingCountryCode: "US"
+            MailingCountryCode: "US",
+            OwnerId: vars.ownerId
         }
     else null
 ] filter (c) -> c != null

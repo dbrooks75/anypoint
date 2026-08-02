@@ -28,5 +28,6 @@ var paymentDate =
     Payment_Method__c: paymentMethod,
     Payment_Status__c: "Completed",
     ReceiptDate__c: paymentDate,
-    ReferenceNumber__c: referenceNumber
+    ReferenceNumber__c: referenceNumber,
+    OwnerId: vars.ownerId
 }

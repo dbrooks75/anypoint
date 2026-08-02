@@ -8,5 +8,6 @@ output application/java
         ((vars.row.date_issued as Date {format: "M/d/yyyy"} as String {format: "yyyy-MM-dd"}) ++ "T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null,
     Address_Type__c: vars.addressType,
-    Is_Primary__c: vars.addressType == "Mailing"
+    Is_Primary__c: vars.addressType == "Mailing",
+    OwnerId: vars.ownerId
 }

@@ -14,5 +14,6 @@ vars.aqrQuestions map (q) -> {
     DateValue: q.dateValue,
     IntegerResponseValue: q.integerValue,
     ChoiceValue: q.choiceValue,
-    ResponseText: q.responseText
+    ResponseText: q.responseText,
+    OwnerId: vars.ownerId
 }

@@ -14,5 +14,6 @@ var issueDateTime =
     Name: "Business License Assessment",
     EffectiveDateTime: issueDateTime,
     Type: "LicensingAndPermitting",
-    BusinessLicenseApplication__c: vars.blaId
+    BusinessLicenseApplication__c: vars.blaId,
+    OwnerId: vars.ownerId
 }

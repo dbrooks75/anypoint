@@ -15,5 +15,6 @@ vars.aqrQuestions map (q) -> {
     DateValue: q.dateValue,
     IntegerResponseValue: null,
     ChoiceValue: if (q.choiceValue != null) q.choiceValue as String else null,
-    ResponseText: q.responseText
+    ResponseText: q.responseText,
+    OwnerId: vars.ownerId
 }

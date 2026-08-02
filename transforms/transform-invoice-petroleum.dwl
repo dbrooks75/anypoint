@@ -28,5 +28,6 @@ var dueDate =
     BusinessLicenseApplication__c: vars.blaId,
     DueDate__c: dueDate,
     InvoiceDate__c: invoiceDate,
-    InvoiceStatus__c: "Paid"
+    InvoiceStatus__c: "Paid",
+    OwnerId: vars.ownerId
 }

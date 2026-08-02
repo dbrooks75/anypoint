@@ -47,7 +47,8 @@ fun makeContact(respparty, title) = do {
                else null,
         AccountId: vars.accountId,
         Phone: null,
-        TitleType: "Other"
+        TitleType: "Other",
+        OwnerId: vars.ownerId
     }
 }
 ---

@@ -38,5 +38,6 @@ var status = if (expiredDate == null or (now() as Date) < expiredDate) "Verified
     Expiration_Date__c: expiredDate,
     RegulatoryAuthorizationTypeId: vars.licenseTypeId,
     Status: status,
-    Legacy_License_Number__c: rid
+    Legacy_License_Number__c: rid,
+    OwnerId: vars.ownerId
 }

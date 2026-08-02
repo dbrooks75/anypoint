@@ -14,7 +14,8 @@ if (fname != "" or lname != "")
             Title: "Petroleum",
             Email: vars.row.email_addr,
             // Format assumption — see flow-designs.md, not yet confirmed
-            Phone: (vars.row.contact_area_code default "") ++ "-" ++ (vars.row.contact_telephone default "")
+            Phone: (vars.row.contact_area_code default "") ++ "-" ++ (vars.row.contact_telephone default ""),
+            OwnerId: vars.ownerId
         }
     ]
 else

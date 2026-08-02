@@ -6,5 +6,6 @@ output application/java
     Quantity__c: 1,
     LineType__c: "Base Fee",
     ProrateFactor__c: 100,
-    UnitPrice__c: 120
+    UnitPrice__c: 120,
+    OwnerId: vars.ownerId
 }

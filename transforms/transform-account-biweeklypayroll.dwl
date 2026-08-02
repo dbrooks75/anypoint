@@ -48,5 +48,6 @@ var stateNames = {
     BillingState: stateNames[vars.row.CompanyState default ""] default (vars.row.CompanyState default ""),
     BillingPostalCode: padZip(vars.row.CompanyZip),
     Preferred_Method_of_Comm__c: "Mail",
-    Conversion_Identifier__c: "R1-Conversion"
+    Conversion_Identifier__c: "R1-Conversion",
+    OwnerId: vars.ownerId
 }

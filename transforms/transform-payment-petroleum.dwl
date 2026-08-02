@@ -33,5 +33,6 @@ var bankNo = (vars.row.bank_no default "" splitBy ".")[0]
     Payment_Status__c: "Completed",
     ReceiptDate__c: paymentDate,
     ReferenceNumber__c: referenceNumber,
-    Notes__c: "Bank_NO" ++ bankNo
+    Notes__c: "Bank_NO" ++ bankNo,
+    OwnerId: vars.ownerId
 }

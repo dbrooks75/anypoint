@@ -6,5 +6,6 @@ output application/java
     BusinessLicenseApplication__c: vars.row.blaId,
     DueDate__c: |2026-09-30|,
     InvoiceDate__c: |2026-08-01|,
-    InvoiceStatus__c: "Sent"
+    InvoiceStatus__c: "Sent",
+    OwnerId: vars.ownerId
 }

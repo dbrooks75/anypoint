@@ -2052,6 +2052,21 @@ BiWeeklyPayroll's equivalent Transform Message updates (`transform-bla-biweeklyp
 
 ---
 
+## 11. `OwnerId` on all Create records (all work units, 2026-08-01/02)
+Every pre-create transform's output record now includes `OwnerId: vars.ownerId` as its last field — added to BiWeeklyPayroll first (2026-08-01), then mirrored to Jewelry and Petroleum (2026-08-02). Where `vars.ownerId` itself is set/populated in Studio is not yet documented here.
+
+**Applies to** (all Create-payload transforms across all three work units): Account, Account_Status__c, Assessment, AssessmentQuestionResponse, Business_License_Application__c (BLA), BusinessLicense, Contact (all array items), ContentNote (Petroleum/BiWeeklyPayroll), Invoice__c, InvoiceLine__c, Location (all array items), PartyAddress__c, Payment__c, and the Sent Invoice/InvoiceLine cutover transforms.
+
+**Does not apply to** — confirmed these objects don't have the field:
+- `Address__c` (`transform-address.dwl`, `transform-address-biweeklypayroll.dwl`)
+- `ContentDocumentLink` (`transform-contentdocumentlink-petroleum.dwl`, `transform-contentdocumentlink-biweeklypayroll.dwl`)
+
+**Open question**: `transform-accountcontactrelation.dwl` (single file shared across all three work units, builds `AccountContactRelation`) was left untouched — not confirmed whether `AccountContactRelation` supports `OwnerId` the same way `Address__c`/`ContentDocumentLink` don't, or whether it was simply missed. Confirm before assuming either way.
+
+Helper/lookup/results-mapping transforms (e.g. `transform-aqr-questions*.dwl`, `transform-*-filter-and-name*.dwl`, `transform-*-lookup*.dwl`, `transform-location-results*.dwl`, `transform-vehicles-combine.dwl`) don't produce Create payloads directly and were left alone.
+
+---
+
 ## PostgreSQL Reconciliation Log (deferred — see TODO above)
 
 ### DDL

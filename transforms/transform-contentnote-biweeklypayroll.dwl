@@ -7,5 +7,6 @@ var html = "<p>Classification Involved: " ++ classificationInvolved ++ "</p>"
 ---
 {
     Title: "Bi-Weekly Conversion",
-    Content: html
+    Content: html,
+    OwnerId: vars.ownerId
 }

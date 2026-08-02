@@ -34,5 +34,6 @@ var expirationDateTime =
     EffectiveDateTime: effectiveDateTime,
     ExpirationDateTime: expirationDateTime,
     Type: "LicensingAndPermitting",
-    BusinessLicenseApplication__c: vars.blaId
+    BusinessLicenseApplication__c: vars.blaId,
+    OwnerId: vars.ownerId
 }

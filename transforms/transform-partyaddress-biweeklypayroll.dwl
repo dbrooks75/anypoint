@@ -8,5 +8,6 @@ output application/java
         ((vars.row.DateRecd as Date {format: "M/d/yyyy"} as String {format: "yyyy-MM-dd"}) ++ "T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null,
     Address_Type__c: vars.addressType,
-    Is_Primary__c: vars.locationName == "Company"
+    Is_Primary__c: vars.locationName == "Company",
+    OwnerId: vars.ownerId
 }

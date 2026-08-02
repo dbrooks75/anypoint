@@ -13,5 +13,6 @@ var html = "<p>Certificate: " ++ certificate ++ "</p>" ++
 ---
 {
     Title: "Petroleum Conversion",
-    Content: html
+    Content: html,
+    OwnerId: vars.ownerId
 }

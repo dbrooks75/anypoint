@@ -73,5 +73,6 @@ var omniJsonData = write(
     SiteCity: vars.row.city default "",
     SiteStateCode: vars.row.state default "",
     SitePostalCode: padZip(vars.row.zip),
-    SiteCountryCode: "US"
+    SiteCountryCode: "US",
+    OwnerId: vars.ownerId
 }

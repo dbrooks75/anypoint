@@ -69,4 +69,5 @@ var periodStartDate =
     Legacy_License_Number__c: licenseno,
     Insurance_Company__c: vars.row.insurance_company,
     Insurance_Policy_Issue_Date__c: periodStartDate,
+    OwnerId: vars.ownerId
 }
