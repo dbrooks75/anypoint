@@ -5,7 +5,7 @@ output application/java
 // (mirrors transform-bla.dwl's Status rule: if a 2026 deposit already exists, no cutover
 // "Sent" invoice is needed for that account)
 fun hasCurrentYearDeposit(jobno: String) =
-    sizeOf(vars.arRows filter (row) ->
+    sizeOf(vars.laborArRows filter (row) ->
         (row.jobno default "") == jobno and
         (row.deposit_date default "") != "" and
         ((row.deposit_date as Date {format: "M/d/yyyy"}) as String {format: "yyyy"}) == "2026"

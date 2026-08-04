@@ -332,7 +332,7 @@ The combined flow is implemented as a main flow calling out to named sub-flows v
 |---|---|
 | `InitAssessmentQuestionVersion` | Runs once (not per-row) — builds `vars.aqvMap`, the AssessmentQuestionVersion lookup used later by Assessment Question Response (`transform-aqv-lookup.dwl`) |
 | `InitAccountRecordType` | **Planned, not actually built in Jewelry** — see note below the sub-flow body |
-| `AddAccount` | Salesforce Create Account, Result & Log Pattern; sets `accountId`. If `accountId != null`, also Choice-gated creates one Account_Status__c (filters the pre-parsed `vars.arRows` to this row's jobno, takes the oldest `deposit_date` — see section 5) |
+| `AddAccount` | Salesforce Create Account, Result & Log Pattern; sets `accountId`. If `accountId != null`, also Choice-gated creates one Account_Status__c (filters the pre-parsed `vars.laborArRows` to this row's jobno, takes the oldest `deposit_date` — see section 5) |
 | `AddLocationsAndAddresses` | Location(s) → per-location Choice-gated Address__c → PartyAddress__c (see Flow Structure below) |
 | `AddContacts` | Per-candidate (0-4) lookup-before-create, added 2026-07-24: for each candidate, Salesforce Query by name (Jewelry has no Email source field — see transform-contact.dwl); 1 match → AccountContactRelation create, no Contact create; 0 matches → Contact create as before; 2+ matches → skip both, log "Skipped - Ambiguous Match". Independent, no gating |
 | `AddBusinessLicenseApp` | BLA → Choice-gated Business License / Assessment / Assessment Question Response chain; sets `blaId`, appends to `blaJobnoLog` |
@@ -474,7 +474,7 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
   → Set Variable: laborStdRows = #[payload]
   → File Read: C:\data\LaborAR.csv
   → Transform Message (transform-ar-filter-and-name.dwl — operates directly on payload straight from the Read, no intermediate raw variable, same pattern as LaborStd.csv above; filters to rows where jobno starts with "CS-", sorts by deposit_date ascending)
-  → Set Variable: arRows = #[payload] (reused by both AddAccount, per-row filtered by jobno, and AddInvoices, iterated whole — parsing once here instead of twice)
+  → Set Variable: laborArRows = #[payload] (renamed from `arRows`, 2026-08-04 — reused by both AddAccount, per-row filtered by jobno, and AddInvoices, iterated whole — parsing once here instead of twice)
   → Flow Reference: InitAssessmentQuestionVersion (runs once — sets vars.aqvMap)
   → Flow Reference: InitAccountRecordType (runs once — sets vars.accountRecordTypeId)
   → For Each row: (Collection: #[vars.laborStdRows])
@@ -486,7 +486,7 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
           → Salesforce Create Account (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "Account"]
           → Choice
               When #[vars.accountId != null]:
-                  → Transform Message (transform-account-status.dwl — filters the pre-parsed vars.arRows to rows matching vars.row.jobno, takes the oldest deposit_date among them; see section 5)
+                  → Transform Message (transform-account-status.dwl — filters the pre-parsed vars.laborArRows to rows matching vars.row.jobno, takes the oldest deposit_date among them; see section 5)
                   → Salesforce Create Account_Status__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "Account_Status__c"]
               Otherwise: (skip — Account failed, Account_Status__c not attempted)
       → Choice (**new outer gate, 2026-07-29** — everything below, through the end of
@@ -586,7 +586,7 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
               BLA/BusinessLicense/Assessment/AQR not attempted)
   → File Write: C:\data\bla_jobno_map.csv (overwrite, content = vars.blaJobnoLog as CSV — debug/audit artifact; the labor_ar join below uses vars.blaJobnoLog directly in memory, no read-back needed)
 
-  → Flow Reference: AddInvoices (no input needed — reads vars.arRows directly)
+  → Flow Reference: AddInvoices (no input needed — reads vars.laborArRows directly)
       (see "3. Invoice Load" below for what AddInvoices does — For Each row over the given raw CSV, join to vars.blaJobnoLog by jobno, Choice-gated Invoice__c → InvoiceLine__c/Payment__c)
 
   → Flow Reference: AddSentInvoice (see section 4 — self-contained: filters vars.blaJobnoLog to Current-sourced accounts and loops internally, creating Invoice__c "Sent" + InvoiceLine__c per account, no Payment__c)
@@ -639,7 +639,7 @@ The Invoice Load (below) references `vars.blaJobnoLog` directly and joins on job
 
 ## 3. Invoice Load — `AddInvoices` sub-flow
 
-Loads Invoice__c / InvoiceLine__c / Payment__c from `LaborAR.csv`, joined to the BLA Id captured during the labor_std portion of the same flow execution (see "2. Combined Load Flow" above — triggered once by `LoadReadyFlag.csv`). Called once via Flow Reference, no input needed — reads `vars.arRows`, which is parsed once upfront in the main flow (see Sub-Flow Architecture above and section 2's Flow Structure).
+Loads Invoice__c / InvoiceLine__c / Payment__c from `LaborAR.csv`, joined to the BLA Id captured during the labor_std portion of the same flow execution (see "2. Combined Load Flow" above — triggered once by `LoadReadyFlag.csv`). Called once via Flow Reference, no input needed — reads `vars.laborArRows`, which is parsed once upfront in the main flow (see Sub-Flow Architecture above and section 2's Flow Structure).
 
 ### Grain
 Confirmed: **1 row = 1 Invoice__c = 1 InvoiceLine__c = 1 Payment__c.** `jobno` is not unique within `LaborAR.csv` — the same job can have multiple invoices (e.g. job `1996350007` has 4 same-day deposits, see `dev-questions.md` #5) — but that doesn't change the grain, it just means the jobno→blaId/accountId lookup can match multiple rows to the same BLA, which is expected.
@@ -684,7 +684,7 @@ Invoices load oldest-first, sorted by `deposit_date` (not the pymt_type-derived 
 
 **`jobno` is now a Text field, not Number (2026-07-20)** — incoming data changed; for Jewelry every `jobno` starts with `"CS-"`, no other filter needed. `transform1-filter-and-name.dwl`/`transform-ar-filter-and-name.dwl` updated: filter is now `(row.jobno default "") matches /^CS-.+/` (was the numeric-positive-integer regex against a `.`-stripped value), and the `.`-stripping map/reassignment of `jobno` was dropped entirely since there's no more decimal-export artifact to clean on a Text column. **Confirmed (2026-07-20)**: `transform-bla.dwl`'s `ApplicationType: if (jobno[-2 to -1] == "01") "New" else "Renewal"` needs no change — the last-2-digit convention is unchanged, just now prefixed with `"CS-"` instead of being a bare number, and slicing the last 2 characters of the string works the same either way.
 
-**`Status` no longer hardcoded to `"Approved"` (2026-07-27)** — `transform-bla.dwl` sets `Business_License_Application__c.Status`. **Update (2026-08-04): now matches Petroleum's rule exactly** (`transform-bla-petroleum.dwl`'s `Status`, see section 6), superseding the original simpler version — `SourceFileType == "Current"` → `"Approved"` if any of that `jobno`'s `vars.arRows` rows (`matchingArRows`, filtered by `jobno` instead of Petroleum's `licenseno`) has a `deposit_date` whose year is `2026` (`hasCurrentYearDeposit`, same hardcoded-2026 literal as Petroleum — this is a one-time cutover load), else `"Draft"`; `SourceFileType == "Historical"` → always `"Approved"`. The original version (`if (SourceFileType == "Current") "Draft" else "Approved"`, no AR check) was a deliberate initial simplification, not an oversight — this update brings the two work units back in line.
+**`Status` no longer hardcoded to `"Approved"` (2026-07-27)** — `transform-bla.dwl` sets `Business_License_Application__c.Status`. **Update (2026-08-04): now matches Petroleum's rule exactly** (`transform-bla-petroleum.dwl`'s `Status`, see section 6), superseding the original simpler version — `SourceFileType == "Current"` → `"Approved"` if any of that `jobno`'s `vars.laborArRows` rows (`matchingArRows`, filtered by `jobno` instead of Petroleum's `licenseno`) has a `deposit_date` whose year is `2026` (`hasCurrentYearDeposit`, same hardcoded-2026 literal as Petroleum — this is a one-time cutover load), else `"Draft"`; `SourceFileType == "Historical"` → always `"Approved"`. The original version (`if (SourceFileType == "Current") "Draft" else "Approved"`, no AR check) was a deliberate initial simplification, not an oversight — this update brings the two work units back in line.
 
 **Correction (2026-07-22)**: `transform-business-license.dwl`'s `Name: "CS-" ++ jobno` was missed in the 2026-07-20 pass — before this change, `jobno` was a bare number (e.g. `"12345"`) so prepending `"CS-"` produced `"CS-12345"`. Now that `jobno` already comes through with the `"CS-"` prefix from the source data, that line was double-prefixing (`"CS-CS-12345"`). Fixed to `Name: jobno`. Worth grepping for any other `"CS-" ++ jobno`-shaped concatenation if one turns up elsewhere — this was the only instance found.
 
@@ -723,9 +723,9 @@ Invoices load oldest-first, sorted by `deposit_date` (not the pymt_type-derived 
 | ReferenceNumber__c | reference # field per pymt_type table above, decimal-stripped (`.00` artifact — see Date Format section's numeric-column note) |
 
 ### Flow Structure (`AddInvoices` sub-flow body)
-No re-parse needed here — `vars.arRows` was already computed once upfront (see section 2's Flow Structure), already filtered/cleaned/sorted oldest-first. `AddInvoices` just iterates over it directly:
+No re-parse needed here — `vars.laborArRows` was already computed once upfront (see section 2's Flow Structure), already filtered/cleaned/sorted oldest-first. `AddInvoices` just iterates over it directly:
 ```
-For Each (Collection: #[vars.arRows]):
+For Each (Collection: #[vars.laborArRows]):
       → Set Variable: row = #[payload] (Mule's For Each has no built-in per-item variable — see note in section 2's Flow Structure)
       → Transform Message (transform-ar-lookup.dwl — finds {jobno, blaId, accountId} from vars.blaJobnoLog by jobno; {} if no match)
       → Set Variable: blaAccountLookup = payload
@@ -803,7 +803,7 @@ For every account sourced from the **Current** portion of `LaborStd.csv` (`Sourc
 
 To make this possible, `blaJobnoLog` entries now also capture `sourceFileType` (see section 2's Flow Structure) — after `AddInvoices` completes, the main flow filters `blaJobnoLog` down to `Current` entries and loops over just those, calling `AddSentInvoice` once per account.
 
-**Update (2026-08-04)**: the filter is no longer a plain inline `sourceFileType == "Current"` check — now also skips any account whose `jobno` already has a `2026` `deposit_date` in `vars.arRows` (a real AR payment already came in, so the cutover placeholder invoice isn't needed), same "already paid this year" rule Petroleum's `transform-sent-invoice-filter-petroleum.dwl` uses. Moved into its own file, `transform-sent-invoice-filter.dwl`, mirroring Petroleum's dedicated filter transform rather than staying inline, since the logic is no longer a one-line check.
+**Update (2026-08-04)**: the filter is no longer a plain inline `sourceFileType == "Current"` check — now also skips any account whose `jobno` already has a `2026` `deposit_date` in `vars.laborArRows` (a real AR payment already came in, so the cutover placeholder invoice isn't needed), same "already paid this year" rule Petroleum's `transform-sent-invoice-filter-petroleum.dwl` uses. Moved into its own file, `transform-sent-invoice-filter.dwl`, mirroring Petroleum's dedicated filter transform rather than staying inline, since the logic is no longer a one-line check.
 
 ### Field Mapping
 
@@ -833,7 +833,7 @@ No Payment__c is created for this invoice.
 Self-contained, same pattern as `AddInvoices` — the main flow just calls this once (no input needed; `vars.blaJobnoLog` persists automatically since it's a flow variable), and this sub-flow does its own filtering and looping:
 ```
 Transform Message (transform-sent-invoice-filter.dwl — filters vars.blaJobnoLog to
-  Current-sourced entries with no 2026 deposit_date in vars.arRows)
+  Current-sourced entries with no 2026 deposit_date in vars.laborArRows)
 Set Variable: currentAccounts = payload
 For Each (Collection: #[vars.currentAccounts]):
     Set Variable: row = #[payload] (row = {jobno, blaId, accountId, sourceFileType} — not a labor_std CSV row; no need for separate blaId/accountId Set Variables, transform-sent-invoice.dwl reads vars.row.blaId/vars.row.accountId directly)
@@ -864,13 +864,13 @@ New object: `Account_Status__c`. One record per account, not per invoice — `Ef
 ### Design choice: nested in `AddAccount`, not a separate post-`AddInvoices` sub-flow
 Originally designed as a separate `AddAccountStatus` sub-flow that ran after `AddInvoices` completed. Revised to instead live directly inside `AddAccount`, gated on `vars.accountId != null`, because `vars.laborArRaw` is read before any inserts (including Account) — so the data's already available at Account-creation time, in the same per-row loop, no separate post-processing pass needed.
 
-Initially this meant re-parsing `laborArRaw` from scratch inside the transform on every single account (O(rows × accounts)) — simple, but wasteful. Revised again: `vars.arRows` (filter/clean/sort) is now computed **once, upfront**, right after `LaborAR.csv` is read (see section 2's Flow Structure), before the main labor_std `For Each` even starts. Both `AddAccount` (filtered to one jobno) and `AddInvoices` (iterated whole) now just reuse that one pre-parsed `vars.arRows` — no re-parsing anywhere.
+Initially this meant re-parsing `laborArRaw` from scratch inside the transform on every single account (O(rows × accounts)) — simple, but wasteful. Revised again: `vars.laborArRows` (filter/clean/sort) is now computed **once, upfront**, right after `LaborAR.csv` is read (see section 2's Flow Structure), before the main labor_std `For Each` even starts. Both `AddAccount` (filtered to one jobno) and `AddInvoices` (iterated whole) now just reuse that one pre-parsed `vars.laborArRows` — no re-parsing anywhere.
 
 ### Field Mapping (`transform-account-status.dwl`)
 | Field | Source |
 |---|---|
 | Account__c | `vars.accountId` |
-| Effective_Date__c | oldest `deposit_date` among `vars.arRows` matching `vars.row.jobno`, parsed to DataWeave `Date` type (same `Date`-not-`String` rule as Invoice__c/Payment__c date fields); `null` if no matching AR rows |
+| Effective_Date__c | oldest `deposit_date` among `vars.laborArRows` matching `vars.row.jobno`, parsed to DataWeave `Date` type (same `Date`-not-`String` rule as Invoice__c/Payment__c date fields); `null` if no matching AR rows |
 | Status__c | hardcoded `"Active"` for all |
 
 ### `transform-account-status.dwl`
@@ -878,7 +878,7 @@ Initially this meant re-parsing `laborArRaw` from scratch inside the transform o
 %dw 2.0
 output application/java
 
-var matchingRows = vars.arRows filter (row) -> row.jobno == vars.row.jobno
+var matchingRows = vars.laborArRows filter (row) -> row.jobno == vars.row.jobno
 
 var oldestDepositDate = if (sizeOf(matchingRows) > 0)
     (matchingRows orderBy (row) -> row.deposit_date as Date {format: "M/d/yyyy"})[0].deposit_date
@@ -943,7 +943,7 @@ File Read (Path: C:\data\MercStd.csv)
 File Read (Path: C:\data\MercAR.csv)
   → Transform Message (transform-ar-filter-and-name-petroleum.dwl — same licenseno clean-up,
     sorts by deposit_date ascending)
-  → Set Variable: mercArRows = #[payload] (deliberately distinct from Jewelry's vars.arRows —
+  → Set Variable: mercArRows = #[payload] (deliberately distinct from Jewelry's vars.laborArRows —
     referenced by transform-bla-petroleum.dwl's AmountPaid lookup and
     transform-account-status-petroleum.dwl)
 ```
@@ -955,7 +955,7 @@ The vehicles file reads + `transform-vehicles-combine.dwl` join (see Vehicles Fl
 
 **Issue-date equivalent** — Jewelry's `transform-business-license.dwl`/`transform-assessment.dwl`/`transform-partyaddress.dwl` all derive their date fields from `vars.row.issue_date`, which doesn't exist on `MercStd` either. Confirmed: use `date_issued` for all three (same field already used for the "PET Date App Received" AQR question) — new files `transform-business-license-petroleum.dwl`, `transform-assessment-petroleum.dwl`, `transform-partyaddress-petroleum.dwl`, otherwise identical to Jewelry's, `M/d/yyyy` format per the existing MercStd date-format assumption (also now Jewelry's own format since `issue_date` was retyped to Short Text 2026-07-21 — see section 3's Date Format note).
 
-**Account_Status__c** (`transform-account-status-petroleum.dwl`, new file) — same oldest-`deposit_date`-among-matching logic as Jewelry's `transform-account-status.dwl`, just matched by `licenseno` instead of `jobno`, and reading `vars.mercArRows` instead of `vars.arRows`.
+**Account_Status__c** (`transform-account-status-petroleum.dwl`, new file) — same oldest-`deposit_date`-among-matching logic as Jewelry's `transform-account-status.dwl`, just matched by `licenseno` instead of `jobno`, and reading `vars.mercArRows` instead of `vars.laborArRows`.
 
 **Reused as-is, no Petroleum variant needed**: `transform-address.dwl` (Address__c — no jobno/issue_date reference, `add1`/`add2`/`city`/`state`/`zip` all present on `MercStd`), `transform-location-results.dwl` (pure Create-response mapping, no row fields).
 
@@ -1318,7 +1318,7 @@ Set Variable: aqvMap = #[payload]
 Salesforce Query: SELECT Id FROM RecordType WHERE SobjectType = 'Account' AND DeveloperName = 'Business_Account'
 Set Variable: accountRecordTypeId = #[payload[0].Id]
 ```
-Placed upfront, alongside the `MercAR.csv` → `vars.mercArRows` read in the main Flow Structure above — parsed once before the main `For Each`, same "parse once, filter per-row inside the transform" pattern Jewelry's `vars.arRows` uses (no `SourceFileType` filtering needed here, same as `vars.mercArRows`'s `licenseno`-only matching in `transform-bla-petroleum.dwl`).
+Placed upfront, alongside the `MercAR.csv` → `vars.mercArRows` read in the main Flow Structure above — parsed once before the main `For Each`, same "parse once, filter per-row inside the transform" pattern Jewelry's `vars.laborArRows` uses (no `SourceFileType` filtering needed here, same as `vars.mercArRows`'s `licenseno`-only matching in `transform-bla-petroleum.dwl`).
 
 #### `PET_Delivery_Vehicles` JSON shape (confirmed)
 The AQR field is a long text field — value is a JSON **string** (`write(..., "application/json")`), not a structured field. Confirmed shape is `{rows: [...], columns: [...]}`:
@@ -1358,7 +1358,7 @@ Everything not listed here (`transform-address.dwl`, `transform-location-results
   - `Trade__c` — hardcoded to `"TBD"` placeholder (real value not yet decided — see dev question #9).
   - `ApplicationType` — **no longer hardcoded** (2026-07-17, revises the 2026-07-15 fix). No jobno to derive New/Renewal from, unlike Jewelry (dev question #11), so instead: `"Renewal"` if `matchingArRows` (the same licenseno-filtered `MercAR` rows `AmountPaid`/`Status` already use) has **1 or more** records, else `"New"`. Value confirmed as `"Renewal"`, matching Jewelry's `transform-bla.dwl` picklist value (`"Renewal"`, not `"Renew"`) — checked against that file per this fix's requirement to stay consistent with Jewelry's existing picklist values.
   - `Description` reads `"Legacy License Number: " ++ licenseno` instead of `"Legacy Job Number: " ++ jobno`.
-  - `AmountPaid` — the `tot_pymt_amt` from the `MercAR` (AR) record with the **max** `deposit_date`, matched by `licenseno`. Implemented by filtering `vars.mercArRows` (Petroleum's pre-parsed AR rows, same "parse once upfront" pattern as Jewelry's `vars.arRows` — see section 2's Flow Structure and section 5, but deliberately named `mercArRows` to keep it distinct) to `licenseno` matches, then taking the row with the latest `deposit_date` — mirror image of `transform-account-status.dwl`'s oldest-date logic (section 5), just `[-1]` (last, since `orderBy` is ascending) instead of `[0]`. Gated on `Status` (computed just above it, so `AmountPaid`'s `var` was moved after `status`'s) — `0` if `Status == "Draft"`, else the `tot_pymt_amt` rule above unchanged. **Update (2026-08-04)**: `transform-bla.dwl` now uses this identical rule (`jobno`/`vars.arRows` instead of `licenseno`/`vars.mercArRows`) — no longer Petroleum-only, superseding the earlier hardcoded-`0` version.
+  - `AmountPaid` — the `tot_pymt_amt` from the `MercAR` (AR) record with the **max** `deposit_date`, matched by `licenseno`. Implemented by filtering `vars.mercArRows` (Petroleum's pre-parsed AR rows, same "parse once upfront" pattern as Jewelry's `vars.laborArRows` — see section 2's Flow Structure and section 5, but deliberately named `mercArRows` to keep it distinct) to `licenseno` matches, then taking the row with the latest `deposit_date` — mirror image of `transform-account-status.dwl`'s oldest-date logic (section 5), just `[-1]` (last, since `orderBy` is ascending) instead of `[0]`. Gated on `Status` (computed just above it, so `AmountPaid`'s `var` was moved after `status`'s) — `0` if `Status == "Draft"`, else the `tot_pymt_amt` rule above unchanged. **Update (2026-08-04)**: `transform-bla.dwl` now uses this identical rule (`jobno`/`vars.laborArRows` instead of `licenseno`/`vars.mercArRows`) — no longer Petroleum-only, superseding the earlier hardcoded-`0` version.
   - `Status` — same shape as Jewelry's `transform-bla.dwl` equivalent as of 2026-08-04 (see section 2's `Status` note, updated same day) — was more involved than Jewelry's until that update. Business rule (2026-07-15): if `vars.row.SourceFileType == "Current"`, then `"Approved"` if any of that `licenseno`'s `MercAR` rows (`matchingArRows`, the same filtered set `AmountPaid` uses) has a `deposit_date` whose year is **2026** (hardcoded literal, not derived from `now()` — this is a one-time cutover load), else `"Draft"`; if `SourceFileType == "Historical"`, always `"Approved"`. This is `Business_License_Application__c.Status`, distinct from `transform-business-license-petroleum.dwl`'s `RegulatoryAuthorization.Status` — see that file's own bullet below for its (now-revised) rule.
   - `Policy_Expiration_Date__c` (new field, 2026-07-15) = `ins_expire_date`, parsed `M/d/yyyy`. **Moved here from `transform-business-license-petroleum.dwl`'s `Insurance_Policy_Expiration_Date__c`** — that field turned out to be a formula field on `BusinessLicense`/RegulatoryAuthorization, not settable via the connector, so the same rule was re-applied to `Business_License_Application__c.Policy_Expiration_Date__c` instead. `ins_expire_date` is the field already confirmed to hit the Access `0:00:00` export issue (see the date-columns note above) — should already be clean if `MercStd.ins_expire_date` was retyped to Short Text as documented there. **Two corrections en route**: (1) unlike this project's other Petroleum date fields (`Issue_Date__c`, `Expiration_Date__c`, `PeriodStart`/`PeriodEnd`), which are all `DateTime` and get the `as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}` treatment, `Policy_Expiration_Date__c` is a plain **`Date`** field — sending a `DateTime`-shaped value threw `value not of required type`. (2) even after switching to a bare `Date {format: "M/d/yyyy"}` parse, the non-padded original format (e.g. `9/7/2025`) carried through and was still rejected — the `Date` coercion retains the parse format's metadata unless explicitly re-formatted. Fixed the same way the `DateTime` fields already do it: reformat through an intermediate zero-padded `String {format: "yyyy-MM-dd"}`, then re-coerce that string back `as Date {format: "yyyy-MM-dd"}` — `(insExpireDate as Date {format: "M/d/yyyy"} as String {format: "yyyy-MM-dd"}) as Date {format: "yyyy-MM-dd"}`.
   - **Correction (2026-07-16)**: `Insurance_Policy_Issue_Date__c` and a BLA-specific `Issue_Date__c` were briefly added here, then moved to `transform-business-license-petroleum.dwl` (BL) — both actually belong on `BusinessLicense`, not `Business_License_Application__c`. See that file's notes below for the final version.
@@ -1406,7 +1406,7 @@ Everything not listed here (`transform-address.dwl`, `transform-location-results
 Target objects (most of the same set as Jewelry/Petroleum, minus Invoice__c/InvoiceLine__c/Payment__c): Account, Location/Address__c/PartyAddress__c, Contact, Business License Application, Business License, Assessment/Assessment Question Response, Account_Status__c. Source data is **a single input file**.
 
 ### Source file — `BiWeeklyPayroll.csv` (confirmed 2026-07-10)
-Single file, one row per license application, keyed by `RID` (int) — confirms the one-row-per-job grain, so `Account_Status__c`/BLA dates can read straight off the row with no `arRows`-style join.
+Single file, one row per license application, keyed by `RID` (int) — confirms the one-row-per-job grain, so `Account_Status__c`/BLA dates can read straight off the row with no `laborArRows`-style join.
 
 Full column list:
 `RID, CompanyName, CompanyAddr, CompanyCity, CompanyState, CompanyZip, CompanyTel, Email, CompanyContact, CompanyContactTitle, CorpOfficeAddr, CorpOfficeCity, CorpOfficeState, CorpOfficeZip, CorpOfficeTel, CompanyNameSecState, RIagentName, RIagentAddr, RIagentCity, RIagentState, RIagentZip, RIagentTel, CompanyFEIN, MethodPaid, PayDay, ClassificationInvolved, SalaryRangeInvolved, WageHrViol, TypAppl, DateRecd, DateApproved, DateDenied, DateExpired, DateRevoked, ReviewedBy, Proof200Missing, ProofHighestBiWeeklyMissing, ConsentColBargMissing, MethodPaidMissing, PayDayMissing, ClassificationMissing, SalaryRangeMissing, CertNoWageHrViolMissing, OtherMissing, OrigSigChk, SuretyBondChk, PayrollRecChk, ConsentColBargChk, PayrollRec200Chk, MethodPaidChk, PayDayChk, ClassificationChk, SalaryRangeChk, CertNoWageHrViolChk, DateRenewed, DateRecd_validation, DateApproved_validation, DateDenied_validation, DateExpired_validation, DateRevoked_validation, DateRenewed_validation, CompanyZip_validation, CorpOfficeZip_validation, RIagentZip_validation, Email_validation, missing_percentages_%`
@@ -1769,7 +1769,7 @@ Set Variable: aqvMap = #[payload]
 ```
 **Correction (2026-07-14)**: this query previously used the full question sentences as `Name` values (matching what `transform-assessment-question-response-biweeklypayroll.dwl`'s `questions` array also had in its `name:` field, used as the `aqvMap` lookup key) — both were wrong. Salesforce's `AssessmentQuestionVersion.Name` is the short label shown above; the full sentence is `QuestionText` (already correctly used for the created `AssessmentQuestionResponse.Name` in the transform's output). Fixed both the SOQL and the transform's `name:` keys to use the short labels. No more apostrophe-escaping concern now that "the company's" isn't in a `Name` value — none of the corrected short labels contain an apostrophe.
 
-**Debugging note (2026-07-14)**: testing showed 12 of 13 `aqvMap` keys resolve correctly; `"Date Application Received"` came back missing, causing `Required_Field_Missing [Name, AssessmentQuestionId]` on that one AQR record (null-safe selector on a missing map key silently returns `null`, same failure shape as the Petroleum `vars.arRows`/`vars.mercArRows` lesson — surfaces downstream, not at the actual cause). **Root cause found**: the real Salesforce `Name` is `"Date App Received"`, not `"Date Application Received"` — a spec-vs-Salesforce mismatch, not a Status/Active issue. Fixed in the SOQL and the transform's `name:` key.
+**Debugging note (2026-07-14)**: testing showed 12 of 13 `aqvMap` keys resolve correctly; `"Date Application Received"` came back missing, causing `Required_Field_Missing [Name, AssessmentQuestionId]` on that one AQR record (null-safe selector on a missing map key silently returns `null`, same failure shape as the Petroleum `vars.laborArRows`/`vars.mercArRows` lesson — surfaces downstream, not at the actual cause). **Root cause found**: the real Salesforce `Name` is `"Date App Received"`, not `"Date Application Received"` — a spec-vs-Salesforce mismatch, not a Status/Active issue. Fixed in the SOQL and the transform's `name:` key.
 
 **Resolved (2026-07-14) — pinned to Version 1**: checking Salesforce revealed 4 `AssessmentQuestionVersion` records for `"Date App Received"` — 2 Archived, 2 Active (`VersionNumber` 1 and 2). Version 1's `DataType` is `Date`, Version 2's is `DateTime`. The generic "latest version wins" reduce (`transform-aqv-lookup.dwl`, ordered by `VersionNumber ASC`, each step overwrites) would always resolve to Version 2 (DateTime), conflicting with the earlier-confirmed plain-Date `DateValue`. **Confirmed: pin to Version 1, keep `DateValue` as Date.** Rather than modifying the shared `transform-aqv-lookup.dwl` (used as-is by Jewelry/Petroleum/BiWeeklyPayroll) with BiWeeklyPayroll-specific logic, the SOQL itself now excludes "Date App Received" from the general `Name IN (...)` list and adds a separate `OR (Name = 'Date App Received' AND VersionNumber = 1)` clause — so only one record ever comes back for that Name, and the generic "latest wins" reduce trivially resolves to it (there's no competing Version 2 in the result set to lose to). First work unit needing to pin a specific AQV version instead of blindly taking the latest.
 
@@ -1960,7 +1960,7 @@ On New or Updated File (C:\data\, LoadReadyFlagBiWeeklyPayroll.csv)
 **New outer gate, confirmed in Studio, 2026-07-29**: same fix as Jewelry (section 2) and Petroleum (section 6) — `AddLocationsAndAddressesBiWeeklyPayroll`/`AddContactsBiWeeklyPayroll`/`AddBusinessLicenseAppBiWeeklyPayroll` (documented separately below, not as one contiguous trace) now only run `When #[vars.accountId != null]`, instead of unconditionally. `CleanupBiWeeklyPayroll` is unaffected, same as the other two units — it runs once after the whole `For Each` completes, not per-row.
 
 ### Account Status (`transform-account-status-biweeklypayroll.dwl`, resolved 2026-07-21)
-No `arRows`/history-style join needed here (unlike Jewelry/Petroleum) — this work unit has no AR/invoice data at all, and the source file is already one-row-per-job, so `Effective_Date__c` reads straight off the current row instead of filtering/sorting a separate collection.
+No `laborArRows`/history-style join needed here (unlike Jewelry/Petroleum) — this work unit has no AR/invoice data at all, and the source file is already one-row-per-job, so `Effective_Date__c` reads straight off the current row instead of filtering/sorting a separate collection.
 
 | Field | Source |
 |---|---|
@@ -2064,7 +2064,7 @@ The `SandboxName`/`SFUserName` columns added earlier (see `SandboxName`/`SFUserN
 
 ### Required restructure: nest `AddInvoices`/`AddSentInvoice` per account
 Today (sections 3 and 4), `AddInvoices` and `AddSentInvoice` run as two separate passes *after* the entire labor_std `For Each` completes — `AddInvoices` iterates all of `LaborAR.csv` once (joined to `blaJobnoLog` by jobno), then `AddSentInvoice` runs once more, filtered to `Current`-sourced BLAs. To fold this into each account's own iteration instead:
-- Inside the per-account loop, after `AddBusinessLicenseApp` sets `blaId`, filter `vars.arRows` (already parsed once upfront — see section 2) down to just this row's `jobno`: `#[vars.arRows filter (r) -> r.jobno == vars.row.jobno]`.
+- Inside the per-account loop, after `AddBusinessLicenseApp` sets `blaId`, filter `vars.laborArRows` (already parsed once upfront — see section 2) down to just this row's `jobno`: `#[vars.laborArRows filter (r) -> r.jobno == vars.row.jobno]`.
 - Create that account's Invoice__c/InvoiceLine__c/Payment__c from the filtered rows (same per-row Choice-gated logic as today's `AddInvoices` body, just scoped to one jobno instead of the whole file).
 - If `vars.row.SourceFileType == "Current"`, immediately follow with that account's Sent Invoice (today's `AddSentInvoice` body, called once per account instead of once per work unit).
 

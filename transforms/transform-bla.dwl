@@ -15,7 +15,7 @@ fun padZip(z) = do {
     else stripped
 }
 
-var matchingArRows = vars.arRows filter (row) -> (row.jobno default "") == jobno
+var matchingArRows = vars.laborArRows filter (row) -> (row.jobno default "") == jobno
 
 var currentYearArRows = matchingArRows filter (row) ->
     (row.deposit_date default "") != "" and ((row.deposit_date as Date {format: "M/d/yyyy"}) as String {format: "yyyy"}) == "2026"
