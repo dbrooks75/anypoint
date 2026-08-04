@@ -688,6 +688,8 @@ Invoices load oldest-first, sorted by `deposit_date` (not the pymt_type-derived 
 
 **Correction (2026-07-22)**: `transform-business-license.dwl`'s `Name: "CS-" ++ jobno` was missed in the 2026-07-20 pass — before this change, `jobno` was a bare number (e.g. `"12345"`) so prepending `"CS-"` produced `"CS-12345"`. Now that `jobno` already comes through with the `"CS-"` prefix from the source data, that line was double-prefixing (`"CS-CS-12345"`). Fixed to `Name: jobno`. Worth grepping for any other `"CS-" ++ jobno`-shaped concatenation if one turns up elsewhere — this was the only instance found.
 
+**`Trade__c` confirmed (2026-08-04)**: `transform-bla.dwl`'s `Business_License_Application__c.Trade__c` = hardcoded `"Industrial Homework (Jewelry Shop) Permit"` — was previously hardcoded `"Labor Standards"` (never documented here, only in the `.dwl` file). Unlike Petroleum's still-open `"TBD"` placeholder (dev question #9) and BiWeeklyPayroll's deliberate `null`, Jewelry's is a confirmed real value now.
+
 ### Field Mapping
 
 **Invoice__c** (`transform-invoice.dwl`)

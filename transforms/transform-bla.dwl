@@ -78,7 +78,7 @@ var omniJsonData = write(
     // Placeholder — see dev-questions.md for what this should actually be
     AppliedDate: |1900-01-01T12:00:00Z|,
     Category: "License",
-    Trade__c: "Labor Standards",
+    Trade__c: "Industrial Homework (Jewelry Shop) Permit",
     LicenseTypeId: vars.licenseTypeId,
     Description: "Legacy Job Number: " ++ jobno,
     Omni_JSON_Data__c: omniJsonData,
