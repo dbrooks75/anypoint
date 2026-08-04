@@ -19,6 +19,21 @@ var expirationDateTime =
     if (issueDate != "")
         ((expirationDate as String {format: "yyyy-MM-dd"}) ++ "T12:00:00Z") as DateTime {format: "yyyy-MM-dd'T'HH:mm:ssX"}
     else null
+
+// Status: mirrors transform-business-license-petroleum.dwl's rule (2026-08-04) — Historical is
+// always Expired (was Inactive); Current is Active only if a 2026 deposit_date exists for this
+// jobno in vars.laborArRows, else Expired (was unconditionally Active). Own local copy of the
+// AR-matching logic since each transform file is standalone, no shared vars across files.
+var matchingArRows = vars.laborArRows filter (row) -> (row.jobno default "") == jobno
+
+var currentYearArRows = matchingArRows filter (row) ->
+    (row.deposit_date default "") != "" and ((row.deposit_date as Date {format: "M/d/yyyy"}) as String {format: "yyyy"}) == "2026"
+
+var hasCurrentYearDeposit = sizeOf(currentYearArRows) > 0
+
+var status = if ((vars.row.SourceFileType default "") == "Current")
+        (if (hasCurrentYearDeposit) "Active" else "Expired")
+    else "Expired"
 ---
 {
     AccountId: vars.accountId,
@@ -29,7 +44,7 @@ var expirationDateTime =
     PeriodEnd: expirationDateTime,
     Expiration_Date__c: expirationDateTime,
     RegulatoryAuthorizationTypeId: vars.licenseTypeId,
-    Status: if ((vars.row.SourceFileType default "") == "Current") "Active" else "Inactive",
+    Status: status,
     Legacy_License_Number__c: jobno,
     OwnerId: vars.ownerId
 }
