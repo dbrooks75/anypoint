@@ -26,6 +26,14 @@ var status = if ((vars.row.SourceFileType default "") == "Current")
         (if (hasCurrentYearDeposit) "Approved" else "Draft")
     else "Approved"
 
+// AmountPaid: 0 if Status is Draft; otherwise tot_pymt_amt from the LaborAR.csv record with the
+// max deposit_date, matched by jobno (mirrors transform-bla-petroleum.dwl's AmountPaid rule)
+var latestArRow = if (sizeOf(matchingArRows) > 0)
+    (matchingArRows orderBy (row) -> row.deposit_date as Date {format: "M/d/yyyy"})[-1]
+  else null
+
+var amountPaid = if (status == "Draft") 0 else (if (latestArRow != null) latestArRow.tot_pymt_amt as Number else null)
+
 // SiteAddress = the Mailing address, same PO-Box-detection logic as transform-address.dwl's
 // isMailing branch (Jewelry shares the same add1/add2/city/state/zip fields as Petroleum)
 var add1 = vars.row.add1 default ""
@@ -65,8 +73,7 @@ var omniJsonData = write(
 {
     AccountId: vars.accountId,
     ApplicationType: if (jobno[-2 to -1] == "01") "New" else "Renewal",
-    // Jewelry: hardcoded to 0. Original formula: if ((vars.row.tot_pymt default "") != "") vars.row.tot_pymt as Number else null
-    AmountPaid: 0,
+    AmountPaid: amountPaid,
     Status: status,
     // Placeholder — see dev-questions.md for what this should actually be
     AppliedDate: |1900-01-01T12:00:00Z|,
