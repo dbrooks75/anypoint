@@ -6,6 +6,15 @@ output application/java
 // three Location names now share the same source columns
 var isCorporate = vars.locationName == "Corporate"
 
+// AddressType determined here from vars.locationName (2026-08-04) rather than reading an
+// externally-set vars.addressType — "Corporate" is a valid picklist value on this org, so all
+// three Location names map to a distinct AddressType, no collapsing "Physical Location"/"Corporate"
+// into one value
+var addressType =
+    if (vars.locationName == "Company") "Mailing"
+    else if (isCorporate) "Corporate"
+    else "Physical"
+
 // zip is an Access-exported numeric column, same leading-zero-loss/trailing-".0" risk as
 // jobno/ReferenceNumber elsewhere — strip any decimal artifact, then zero-pad back to 5 digits
 // (e.g. "2907" -> "02907"), 2026-07-28
@@ -20,7 +29,7 @@ fun padZip(z) = do {
 ---
 {
     LocationType: "Business Site",
-    AddressType: vars.addressType,
+    AddressType: addressType,
     ParentId: vars.locationId,
     Street: if (isCorporate) (vars.row.CorpOfficeAddr default "") else (vars.row.CompanyAddr default ""),
     City: if (isCorporate) (vars.row.CorpOfficeCity default "") else (vars.row.CompanyCity default ""),
