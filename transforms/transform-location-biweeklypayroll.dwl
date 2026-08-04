@@ -11,6 +11,12 @@ var corpOfficeAddr = vars.row.CorpOfficeAddr default ""
         Description: "Bi-Weekly address for RID " ++ rid,
         OwnerId: vars.ownerId
     },
+    {
+        LocationType: "Business Site",
+        Name: "Physical Location",
+        Description: "Bi-Weekly address for RID " ++ rid,
+        OwnerId: vars.ownerId
+    },
     if (corpOfficeAddr != "")
         {
             LocationType: "Business Site",

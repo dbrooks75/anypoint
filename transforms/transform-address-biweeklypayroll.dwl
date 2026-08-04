@@ -1,7 +1,10 @@
 %dw 2.0
 output application/java
 
-var isCompany = vars.locationName == "Company"
+// "Company" and "Physical Location" (2026-08-04, new) both read from Company* columns; only
+// "Corporate" reads from CorpOffice* — inverted from the old isCompany check since two of the
+// three Location names now share the same source columns
+var isCorporate = vars.locationName == "Corporate"
 
 // zip is an Access-exported numeric column, same leading-zero-loss/trailing-".0" risk as
 // jobno/ReferenceNumber elsewhere — strip any decimal artifact, then zero-pad back to 5 digits
@@ -19,9 +22,9 @@ fun padZip(z) = do {
     LocationType: "Business Site",
     AddressType: vars.addressType,
     ParentId: vars.locationId,
-    Street: if (isCompany) (vars.row.CompanyAddr default "") else (vars.row.CorpOfficeAddr default ""),
-    City: if (isCompany) (vars.row.CompanyCity default "") else (vars.row.CorpOfficeCity default ""),
-    StateCode: if (isCompany) (vars.row.CompanyState default "") else (vars.row.CorpOfficeState default ""),
-    PostalCode: if (isCompany) padZip(vars.row.CompanyZip) else padZip(vars.row.CorpOfficeZip),
+    Street: if (isCorporate) (vars.row.CorpOfficeAddr default "") else (vars.row.CompanyAddr default ""),
+    City: if (isCorporate) (vars.row.CorpOfficeCity default "") else (vars.row.CompanyCity default ""),
+    StateCode: if (isCorporate) (vars.row.CorpOfficeState default "") else (vars.row.CompanyState default ""),
+    PostalCode: if (isCorporate) padZip(vars.row.CorpOfficeZip) else padZip(vars.row.CompanyZip),
     Country: "United States"
 }

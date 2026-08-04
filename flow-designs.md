@@ -1470,8 +1470,8 @@ Built `transform-account-biweeklypayroll.dwl` (new file) implementing this — `
 
 Not yet covered here: `RIagent*` block (still open — likely a Contact, not confirmed).
 
-### Location / Address__c field mapping (confirmed 2026-07-12/13; Corporate made optional 2026-08-01)
-Unlike Jewelry/Petroleum's Mailing/Physical PO-Box-driven split, BiWeeklyPayroll creates **up to two** Location/Address__c pairs per row, sourced from two different address blocks — Company is always created; Corporate is skipped entirely if blank (see below).
+### Location / Address__c field mapping (confirmed 2026-07-12/13; Corporate made optional 2026-08-01; Physical Location added 2026-08-04)
+Unlike Jewelry/Petroleum's Mailing/Physical PO-Box-driven split — BiWeeklyPayroll's `CompanyAddr`/`CorpOfficeAddr` are each a single field, no `add1`/`add2` pair to compare, so there's no PO Box to detect — BiWeeklyPayroll creates **up to three** Location/Address__c records per row: "Company" and "Physical Location" (both always created, both sourced from `Company*`, address-identical to each other since there's no second line to split a distinct street from), and "Corporate" (from `CorpOffice*`, skipped entirely if blank, unrelated to the Company/Physical Location pair).
 
 **Location 1 — "Company"** (from `Company*`):
 | Field | Value |
@@ -1491,6 +1491,10 @@ Unlike Jewelry/Petroleum's Mailing/Physical PO-Box-driven split, BiWeeklyPayroll
 | `PostalCode` | `CompanyZip` |
 | `Country` | `"United States"` (matches Jewelry/Petroleum's `Country`/`"United States"` pattern — **not** a `CountryCode`/`"US"` field, corrected 2026-07-13) |
 
+**Location 1b — "Physical Location"** (added 2026-08-04, from `Company*`, always created alongside "Company"): same `LocationType`, `Description: "Bi-Weekly address for RID " ++ RID` (identical to Company's — no separate wording distinguishing them, unlike Jewelry/Petroleum's `"Mailing"`/`"Physical Location"` Description text).
+
+**Address 1b** (`ParentId` = Location 1b's Id) — same source columns as Address 1 (`Company*`), since there's no second address line to pull a distinct street from: `Street`←`CompanyAddr`, `City`←`CompanyCity`, `StateCode`←`CompanyState`, `PostalCode`←`CompanyZip`, `Country: "United States"`. Company and Physical Location end up address-identical every time — this mirrors Jewelry/Petroleum's own "no PO Box" case, where Mailing and Physical also end up with the same Street since there's nothing to split.
+
 **Location 2 — "Corporate"** (from `CorpOffice*`, corrected 2026-07-13 — user's first pass said `Name = "Company"` for this one too, confirmed should be `"Corporate"`; **skipped if blank, added 2026-08-01** — `CorpOfficeAddr` is the driving field, same "skip if blank" pattern as BiWeeklyPayroll's Contact section below (`CompanyContact`/`RIagentName`); when blank, neither Location 2 nor its Address/PartyAddress__c rows are created at all — Company is unaffected and always created):
 | Field | Value |
 |---|---|
@@ -1509,14 +1513,14 @@ Unlike Jewelry/Petroleum's Mailing/Physical PO-Box-driven split, BiWeeklyPayroll
 | `PostalCode` | `CorpOfficeZip` |
 | `Country` | `"United States"` |
 
-**`AddressType`/`Address_Type__c` confirmed (2026-07-13)**: both Locations get `"Physical"` for now — user's words: "that may change later," so treat as a placeholder, not a final business rule. This means `AddressType` is no longer what distinguishes "Company" from "Corporate" the way `"Mailing"`/`"Physical"` did in Jewelry/Petroleum — that distinction is now carried by `Location.Name`/`vars.locationName` instead ("Company" vs "Corporate"), used purely to pick which source columns (`Company*` vs `CorpOffice*`) feed the Address.
+**`AddressType`/`Address_Type__c` (confirmed 2026-07-13, revised 2026-08-04)**: originally all Locations got the placeholder `"Physical"` ("that may change later," per the user) since `AddressType` wasn't yet distinguishing anything — `Location.Name`/`vars.locationName` alone drove which source columns fed the Address. **Now that a real "Physical Location" exists**, `vars.addressType` is computed instead of hardcoded: `"Mailing"` if `vars.locationName == "Company"`, else `"Physical"` (covers both "Physical Location" and "Corporate"). This is a Studio-side `Set Variable` expression change, not a `.dwl` file — see Flow Structure below.
 
-Built three new transforms:
-- `transform-location-biweeklypayroll.dwl` — always returns the Company Location; returns the Corporate Location only `if (vars.row.CorpOfficeAddr default "") != ""` (filtered out otherwise, 2026-08-01) — no PO-Box-driven conditional like Jewelry/Petroleum, `Description` uses `RID` instead of `jobno`/`licenseno`. Downstream (`transform-location-results-biweeklypayroll.dwl`'s `vars.locationList[idx]` indexing, and the per-location `Address__c`/`PartyAddress__c` creates in the Flow Structure below) needed no changes — a skipped Corporate Location simply never appears in `locationList`/`locationResults`, so its Address/PartyAddress__c never get attempted.
-- `transform-location-results-biweeklypayroll.dwl` — BiWeeklyPayroll equivalent of `transform-location-results.dwl`; returns `locationName` (`Location.Name`, "Company"/"Corporate") instead of `addressType`, since the picklist value no longer varies. In Studio, the inner `For Each` sets `vars.locationName` from this and separately sets `vars.addressType = "Physical"` as a hardcoded constant (not derived).
-- `transform-address-biweeklypayroll.dwl` — branches `Street`/`City`/`StateCode`/`PostalCode` on `vars.locationName == "Company"` (→ `Company*` columns) vs. else (→ `CorpOffice*` columns); `AddressType` is `vars.addressType` (the hardcoded `"Physical"`); `Country: "United States"` (confirmed, not `CountryCode`).
+Built four transforms for this (three original, `transform-address-biweeklypayroll.dwl` revised 2026-08-04):
+- `transform-location-biweeklypayroll.dwl` — always returns Company **and** Physical Location (added 2026-08-04); returns Corporate only `if (vars.row.CorpOfficeAddr default "") != ""` (filtered out otherwise, 2026-08-01) — no PO-Box-driven conditional like Jewelry/Petroleum (there's no second address line to detect a PO Box in), `Description` uses `RID` instead of `jobno`/`licenseno`. Downstream (`transform-location-results-biweeklypayroll.dwl`'s `vars.locationList[idx]` indexing, and the per-location `Address__c`/`PartyAddress__c` creates in the Flow Structure below) needed no changes for either addition — both a skipped Corporate Location and a newly-added Physical Location just flow through the existing generic per-item logic.
+- `transform-location-results-biweeklypayroll.dwl` — BiWeeklyPayroll equivalent of `transform-location-results.dwl`; returns `locationName` (`Location.Name`, "Company"/"Physical Location"/"Corporate") instead of `addressType`. Unchanged by the 2026-08-04 update — generic per-item mapping, no hardcoded Name list.
+- `transform-address-biweeklypayroll.dwl` — **revised 2026-08-04**: branches `Street`/`City`/`StateCode`/`PostalCode` on `vars.locationName == "Corporate"` (→ `CorpOffice*` columns) vs. else (→ `Company*` columns) — inverted from the original `isCompany` check, since two of the three Location names ("Company", "Physical Location") now share the same source columns rather than just one. `AddressType` is `vars.addressType` (now computed Mailing/Physical, see above); `Country: "United States"` (confirmed, not `CountryCode`).
 
-**`transform-partyaddress-biweeklypayroll.dwl` confirmed (2026-07-13) and built**: `Effective_From__c` derives from `DateRecd` (`M/d/yyyy` format, confirmed correct). `Is_Primary__c` is `vars.locationName == "Company"` (Company is primary, Corporate is not). `PartyId`/`AddressId__c`/`Address_Type__c` unchanged from the existing pattern.
+**`transform-partyaddress-biweeklypayroll.dwl` confirmed (2026-07-13) and built**: `Effective_From__c` derives from `DateRecd` (`M/d/yyyy` format, confirmed correct). `Is_Primary__c` is `vars.locationName == "Company"` (Company is primary; Physical Location and Corporate are not — unaffected by the 2026-08-04 Physical Location addition, since the check is exact-match on `"Company"`). `PartyId`/`AddressId__c`/`Address_Type__c` unchanged from the existing pattern.
 
 **Confirmed (2026-07-13): `DateRecd` hit the same Access `0:00:00` export artifact as `MercAR`/`MercStd`'s date columns** (section 6) — fixed the same way, retyping the Access column to Short Text.
 
@@ -1525,7 +1529,8 @@ Built three new transforms:
 ### Location/Address/PartyAddress Flow Structure (nested inside `AddLocationsAndAddressesBiWeeklyPayroll`, same shape as Jewelry/Petroleum section 2/6)
 ```
 Flow Reference: AddLocationsAndAddressesBiWeeklyPayroll
-  → Transform Message (transform-location-biweeklypayroll.dwl — always 2 items, "Company"/"Corporate")
+  → Transform Message (transform-location-biweeklypayroll.dwl — 2-3 items: "Company" and
+      "Physical Location" always, "Corporate" only if CorpOfficeAddr is non-blank)
   → Set Variable: locationList = payload
   → Salesforce Create Location(s): Records = vars.locationList
   → Transform Message (transform-location-results-biweeklypayroll.dwl)
@@ -1533,7 +1538,8 @@ Flow Reference: AddLocationsAndAddressesBiWeeklyPayroll
   → For Each location result: (Collection: #[vars.locationResults])
       → Set Variable: locationId = #[payload.locationId]
       → Set Variable: locationName = #[payload.locationName]
-      → Set Variable: addressType = "Physical"   (hardcoded constant, not derived — see AddressType note above)
+      → Set Variable: addressType = #[if (vars.locationName == "Company") "Mailing" else "Physical"]
+          (computed 2026-08-04, was a hardcoded "Physical" constant — see AddressType note above)
       → Choice
           When #[payload.success]:
               → Transform Message (transform-address-biweeklypayroll.dwl)
