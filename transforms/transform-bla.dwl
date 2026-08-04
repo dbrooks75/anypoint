@@ -15,9 +15,16 @@ fun padZip(z) = do {
     else stripped
 }
 
+var matchingArRows = vars.arRows filter (row) -> (row.jobno default "") == jobno
+
+var currentYearArRows = matchingArRows filter (row) ->
+    (row.deposit_date default "") != "" and ((row.deposit_date as Date {format: "M/d/yyyy"}) as String {format: "yyyy"}) == "2026"
+
+var hasCurrentYearDeposit = sizeOf(currentYearArRows) > 0
+
 var status = if ((vars.row.SourceFileType default "") == "Current")
-    "Draft"
-else "Approved"
+        (if (hasCurrentYearDeposit) "Approved" else "Draft")
+    else "Approved"
 
 // SiteAddress = the Mailing address, same PO-Box-detection logic as transform-address.dwl's
 // isMailing branch (Jewelry shares the same add1/add2/city/state/zip fields as Petroleum)
