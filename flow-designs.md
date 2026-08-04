@@ -1230,7 +1230,49 @@ File 2 — `licenseno`, then truck slots 40-56, then `tot_reg_trucks`, `batch_id
 licenseno, truck_make40, year40, reg_truck_numb40, equipment_no40, tested_sealed40, truck_make41, year41, reg_truck_numb41, equipment_no41, tested_sealed41, truck_make42, year42, reg_truck_numb42, equipment_no42, tested_sealed42, truck_make43, year43, reg_truck_numb43, equipment_no43, tested_sealed43, truck_make44, year44, reg_truck_numb44, equipment_no44, tested_sealed44, truck_make45, year45, reg_truck_numb45, equipment_no45, tested_sealed45, truck_make46, year46, reg_truck_numb46, equipment_no46, tested_sealed46, truck_make47, year47, reg_truck_numb47, equipment_no47, tested_sealed47, truck_make48, year48, reg_truck_numb48, equipment_no48, tested_sealed48, truck_make49, year49, reg_truck_numb49, equipment_no49, tested_sealed49, truck_make50, year50, reg_truck_numb50, equipment_no50, tested_sealed50, truck_make51, year51, reg_truck_numb51, equipment_no51, tested_sealed51, truck_make52, year52, reg_truck_numb52, equipment_no52, tested_sealed52, truck_make53, year53, reg_truck_numb53, equipment_no53, tested_sealed53, truck_make54, year54, reg_truck_numb54, equipment_no54, tested_sealed54, truck_make55, year55, reg_truck_numb55, equipment_no55, tested_sealed55, truck_make56, year56, reg_truck_numb56, equipment_no56, tested_sealed56, tot_reg_trucks, batch_id
 ```
 
-Note: this column order uses `reg_truck_numb`/`tested_sealed` (the `TrucksReg`/Current naming) — if this same raw-`.unl` approach gets applied to the Historical side too, swap in `reg_plate_numb`/`date_tested` per the naming-difference table above.
+**Correction (2026-08-04)**: this column order (`reg_truck_numb`/`tested_sealed`, the `TrucksReg`/Current naming) applies to **both** raw source files — confirmed the naming-difference table above (`reg_plate_numb`/`date_tested` for TrucksHis) only applies to the already-Excel-processed `TrucksHis01`/`TrucksHis02` CSVs, not the raw `.unl` source, which uses the same field names regardless of Current/Historical. So `trucks_reg.unl` and `hitrucks.unl` both use the identical `file1Cols`/`file2Cols` (and combined `allCols`) below — only the file names differ.
+
+**Full raw-file column list (`allCols`, 285 columns, positional)** — `file1Cols` (198) followed by `file2Cols` (88) minus its leading duplicate `licenseno` (since `licenseno` only appears once per row in the raw file — see split logic below):
+```
+licenseno, inspect_comp_code, inspect_comp, truck_make1, year1, reg_truck_numb1, equipment_no1, tested_sealed1, truck_make2, year2, reg_truck_numb2, equipment_no2, tested_sealed2, truck_make3, year3, reg_truck_numb3, equipment_no3, tested_sealed3, truck_make4, year4, reg_truck_numb4, equipment_no4, tested_sealed4, truck_make5, year5, reg_truck_numb5, equipment_no5, tested_sealed5, truck_make6, year6, reg_truck_numb6, equipment_no6, tested_sealed6, truck_make7, year7, reg_truck_numb7, equipment_no7, tested_sealed7, truck_make8, year8, reg_truck_numb8, equipment_no8, tested_sealed8, truck_make9, year9, reg_truck_numb9, equipment_no9, tested_sealed9, truck_make10, year10, reg_truck_numb10, equipment_no10, tested_sealed10, truck_make11, year11, reg_truck_numb11, equipment_no11, tested_sealed11, truck_make12, year12, reg_truck_numb12, equipment_no12, tested_sealed12, truck_make13, year13, reg_truck_numb13, equipment_no13, tested_sealed13, truck_make14, year14, reg_truck_numb14, equipment_no14, tested_sealed14, truck_make15, year15, reg_truck_numb15, equipment_no15, tested_sealed15, truck_make16, year16, reg_truck_numb16, equipment_no16, tested_sealed16, truck_make17, year17, reg_truck_numb17, equipment_no17, tested_sealed17, truck_make18, year18, reg_truck_numb18, equipment_no18, tested_sealed18, truck_make19, year19, reg_truck_numb19, equipment_no19, tested_sealed19, truck_make20, year20, reg_truck_numb20, equipment_no20, tested_sealed20, truck_make21, year21, reg_truck_numb21, equipment_no21, tested_sealed21, truck_make22, year22, reg_truck_numb22, equipment_no22, tested_sealed22, truck_make23, year23, reg_truck_numb23, equipment_no23, tested_sealed23, truck_make24, year24, reg_truck_numb24, equipment_no24, tested_sealed24, truck_make25, year25, reg_truck_numb25, equipment_no25, tested_sealed25, truck_make26, year26, reg_truck_numb26, equipment_no26, tested_sealed26, truck_make27, year27, reg_truck_numb27, equipment_no27, tested_sealed27, truck_make28, year28, reg_truck_numb28, equipment_no28, tested_sealed28, truck_make29, year29, reg_truck_numb29, equipment_no29, tested_sealed29, truck_make30, year30, reg_truck_numb30, equipment_no30, tested_sealed30, truck_make31, year31, reg_truck_numb31, equipment_no31, tested_sealed31, truck_make32, year32, reg_truck_numb32, equipment_no32, tested_sealed32, truck_make33, year33, reg_truck_numb33, equipment_no33, tested_sealed33, truck_make34, year34, reg_truck_numb34, equipment_no34, tested_sealed34, truck_make35, year35, reg_truck_numb35, equipment_no35, tested_sealed35, truck_make36, year36, reg_truck_numb36, equipment_no36, tested_sealed36, truck_make37, year37, reg_truck_numb37, equipment_no37, tested_sealed37, truck_make38, year38, reg_truck_numb38, equipment_no38, tested_sealed38, truck_make39, year39, reg_truck_numb39, equipment_no39, tested_sealed39, truck_make40, year40, reg_truck_numb40, equipment_no40, tested_sealed40, truck_make41, year41, reg_truck_numb41, equipment_no41, tested_sealed41, truck_make42, year42, reg_truck_numb42, equipment_no42, tested_sealed42, truck_make43, year43, reg_truck_numb43, equipment_no43, tested_sealed43, truck_make44, year44, reg_truck_numb44, equipment_no44, tested_sealed44, truck_make45, year45, reg_truck_numb45, equipment_no45, tested_sealed45, truck_make46, year46, reg_truck_numb46, equipment_no46, tested_sealed46, truck_make47, year47, reg_truck_numb47, equipment_no47, tested_sealed47, truck_make48, year48, reg_truck_numb48, equipment_no48, tested_sealed48, truck_make49, year49, reg_truck_numb49, equipment_no49, tested_sealed49, truck_make50, year50, reg_truck_numb50, equipment_no50, tested_sealed50, truck_make51, year51, reg_truck_numb51, equipment_no51, tested_sealed51, truck_make52, year52, reg_truck_numb52, equipment_no52, tested_sealed52, truck_make53, year53, reg_truck_numb53, equipment_no53, tested_sealed53, truck_make54, year54, reg_truck_numb54, equipment_no54, tested_sealed54, truck_make55, year55, reg_truck_numb55, equipment_no55, tested_sealed55, truck_make56, year56, reg_truck_numb56, equipment_no56, tested_sealed56, tot_reg_trucks, batch_id
+```
+
+**Split flow (2026-08-04, not yet built in Studio)** — one read + rename pass building all 285 fields per row, then two independent Transform Message steps each pick their subset of keys via `filterObject` and write their own CSV. `licenseno` is in both `file1Cols` and `file2Cols`, so it survives the filter into both outputs even though the source row only has it once:
+```
+File Read: trucks_reg.unl (or hitrucks.unl for the Historical side — same flow, different file names)
+  → Transform Message (parse + rename, allCols above):
+      %dw 2.0
+      input payload application/csv separator="|", quoteChar="\u0000"
+      output application/java
+
+      var allCols = [...285 names above...]
+      ---
+      payload map (row) -> do {
+          var values = row pluck $
+          ---
+          allCols map ((c, idx) -> { (c): values[idx] }) reduce ((item, acc = {}) -> acc ++ item)
+      }
+  → Set Variable: regTruckRows = payload   (hiTruckRows for the Historical side)
+
+Transform Message (File 1 output):
+    %dw 2.0
+    output application/csv header=true, quoteValues=true
+
+    var file1Cols = [...198 names above...]
+    ---
+    vars.regTruckRows map (row) -> row filterObject ((v, k) -> (file1Cols contains (k as String)))
+  → File Write: TrucksReg01.csv (TrucksHis01.csv for Historical)
+
+Transform Message (File 2 output):
+    %dw 2.0
+    output application/csv header=true, quoteValues=true
+
+    var file2Cols = [...88 names above...]
+    ---
+    vars.regTruckRows map (row) -> row filterObject ((v, k) -> (file2Cols contains (k as String)))
+  → File Write: TrucksReg02.csv (TrucksHis02.csv for Historical)
+```
+Object keys in DataWeave are `Key` values, not plain `String` — the `k as String` cast in the `contains` check is needed for the comparison against the plain-string `file1Cols`/`file2Cols` arrays to work correctly.
 
 **Source files**: `TrucksReg01.csv`, `TrucksReg02.csv`, `TrucksHis01.csv`, `TrucksHis02.csv` — headered CSVs (already-named columns, header: true), sitting in `C:\data\` alongside `MercStd.csv`/`MercAR.csv`. No positional renaming transform needed, unlike raw `laborstd.txt`/`his_lab.txt`.
 
