@@ -96,6 +96,16 @@ Archived last, same convention and reasoning as `LaborStd.csv`/`LaborAR.csv` in 
 ### Combine + Load Process (per work unit)
 1. Current and historical datasets for a given table (e.g. `LaborStd` + `HisLaborStd`) are combined and loaded into Access, with `SourceFileType` (`Current` or `Historical`) set per source table as part of the load.
 
+### Jewelry ongoing load/export procedure (Access, confirmed 2026-08-06)
+The recurring, day-to-day version of this process (distinct from the one-time "Jewelry initial source load" above, which only covered the client's first delivery) — run from the Jewelry Access database's `Form1`:
+
+1. **Form1 → Import Source Data tab → "Import All Files"** — reads `laborstd.txt`/`his_lab.txt` in (via the `ImportSourceData` Mule flow above), producing `LaborStd`/`LaborAR`, each already containing both Current and Historical rows (`SourceFileType`-tagged).
+2. **Delete the `LaborStdExportCandidates` table.**
+3. **Run the `LoadLaborStdExportCandidates` query** to re-create `LaborStdExportCandidates` from the freshly-imported data.
+4. **Run the `CheckForCurrentHistoricalDupes` query** — checks whether any `jobno` appears in both Current and Historical.
+5. **Mark records for export** — set `IsExported` on the rows in `LaborStdExportCandidates` that should go out in this run (see "`ExportCandidates` table + `IsExported` flag" note above — this is how a scoped/test-sized export run gets limited to a subset of accounts).
+6. **Form1 → Exports tab → "Export LaborStd and LaborAR."**
+
 ### Outgoing leg — Access → Mule flow folder
 2. An Access form has one **export button per work unit** (currently only Jewelry exists) that dumps the relevant tables to **CSV** (unchanged format — still comma-delimited with a header row, matching section 2's Reader Configuration) in the folder the Anypoint flow polls. For Jewelry, the button exports `LaborStd.csv`, then `LaborAR.csv`, then the `LoadReadyFlag.csv` sentinel last (order matters — see section 2's Trigger File notes on why the flag file is written only once both data files are fully in place).
 3. A separate button on the same form generates `AccountDeletes.csv` (see section 1). The delete flow's Salesforce-side logic is generic across work units — only the Access query that produces the company-name list changes. Currently there's one button/query; **planned improvement**: split into one button + one query per work unit (Jewelry/Petroleum/BiWeekly) rather than one query that has to be edited per run, to make testing each work unit independently easier.
