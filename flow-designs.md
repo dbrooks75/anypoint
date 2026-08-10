@@ -592,7 +592,14 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
           → Choice
               When #[vars.blaId != null]:
                   → Set Variable: blaJobnoLog = (vars.blaJobnoLog default []) ++ [{ jobno: vars.row.jobno, blaId: vars.blaId, accountId: vars.accountId, sourceFileType: vars.row.SourceFileType }]
-                  → Salesforce Create Business License (linked to blaId, Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "BusinessLicense"]
+                  → Salesforce Create Business License (linked to blaId, Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "BusinessLicense"; sets businessLicenseId]
+                  → Choice
+                      When #[vars.businessLicenseId != null]:
+                          → Transform Message (transform-bla-license-update.dwl) → Salesforce
+                            Update Business License Application (Records: #[[payload]]) →
+                            [Result & Log Pattern → logEntries, object: "BusinessLicenseApplication
+                            (LicensePermitNameId)"]
+                      Otherwise: (skip — Business License failed, LicensePermitNameId not set)
                   → Salesforce Create Assessment (linked to blaId, Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "Assessment"; sets assessmentId]
                   → Transform Message (transform-assessment-question-response.dwl — uses vars.assessmentId, vars.aqvMap; builds list of 7)
                   → Salesforce Create Assessment Question Response (Records: #[payload]) → [List Result & Log Pattern → logEntries, object: "AssessmentQuestionResponse"]
@@ -1105,7 +1112,14 @@ For Each row: (Collection: #[vars.mercStdRows])
                   vars.row.SourceFileType }]
                 → Transform Message (transform-business-license-petroleum.dwl) → Salesforce Create
                   Business License (linked to blaId, Records: #[[payload]]) → [Result & Log Pattern
-                  → logEntries, object: "BusinessLicense"]
+                  → logEntries, object: "BusinessLicense"; sets businessLicenseId]
+                → Choice
+                    When #[vars.businessLicenseId != null]:
+                        → Transform Message (transform-bla-license-update.dwl) → Salesforce
+                          Update Business License Application (Records: #[[payload]]) →
+                          [Result & Log Pattern → logEntries, object: "BusinessLicenseApplication
+                          (LicensePermitNameId)"]
+                    Otherwise: (skip — Business License failed, LicensePermitNameId not set)
                 → Transform Message (transform-assessment-petroleum.dwl) → Salesforce Create Assessment
                   (linked to blaId, Records: #[[payload]]) → [Result & Log Pattern → logEntries,
                   object: "Assessment"; sets assessmentId]
@@ -2153,6 +2167,43 @@ Every pre-create transform's output record now includes `OwnerId: vars.ownerId` 
 **Open question**: `transform-accountcontactrelation.dwl` (single file shared across all three work units, builds `AccountContactRelation`) was left untouched — not confirmed whether `AccountContactRelation` supports `OwnerId` the same way `Address__c`/`ContentDocumentLink` don't, or whether it was simply missed. Confirm before assuming either way.
 
 Helper/lookup/results-mapping transforms (e.g. `transform-aqr-questions*.dwl`, `transform-*-filter-and-name*.dwl`, `transform-*-lookup*.dwl`, `transform-location-results*.dwl`, `transform-vehicles-combine.dwl`) don't produce Create payloads directly and were left alone.
+
+---
+
+## 12. BLA `LicensePermitNameId` — Update after Business License create (Jewelry and Petroleum only, 2026-08-10)
+BLA (`Business_License_Application__c`) needs `LicensePermitNameId` (**standard field, no `__c` suffix** — not a custom field like everything else this project has touched so far) set to the Id of the Business License record created from it, for **Jewelry and Petroleum only — BiWeeklyPayroll is unaffected/unchanged**. Since the License is created *after* the BLA (BLA → BusinessLicense), this can't be set at BLA-create time — it requires a **Salesforce Update** on the already-created BLA once the License's Id is known.
+
+**This is the first Update operation anywhere in this project** — everything before this has been Create or Delete only. The single-item Create Result & Log Pattern's extraction script (`payload.items[0]`, `result.exception`, `result.payload.id`) is assumed to work identically for Update, but this is **not yet empirically confirmed** — same caution this project already applied to Delete, whose response shape turned out to differ slightly from Create's (`id` directly on the item, not nested under `item.payload.id`). Verify Update's actual response shape in Studio (e.g. a `Logger: #[payload]` on a real BLA update) before trusting the extraction script blindly.
+
+**New shared transform**: `transform-bla-license-update.dwl` (one file, reused across Jewelry and Petroleum — the payload is just two Ids, no work-unit-specific logic needed):
+```dw
+%dw 2.0
+output application/java
+---
+{
+    Id: vars.blaId,
+    LicensePermitNameId: vars.businessLicenseId
+}
+```
+
+**Flow change, Jewelry and Petroleum only**: the existing "Salesforce Create Business License" step now also captures its result Id (`sets businessLicenseId`, matching the `; sets <thing>Id` convention already used for `blaId`/`assessmentId`/etc. — previously this step only logged, with no named Id variable). Immediately after, gated on `vars.businessLicenseId != null`:
+```
+→ Salesforce Create Business License (Records: #[[payload]]) → [Result & Log Pattern →
+  logEntries, object: "BusinessLicense"; sets businessLicenseId]
+→ Choice
+    When #[vars.businessLicenseId != null]:
+        → Transform Message (transform-bla-license-update.dwl) → Salesforce Update
+          Business License Application (Records: #[[payload]]) → [Result & Log Pattern →
+          logEntries, object: "BusinessLicenseApplication (LicensePermitNameId)"]
+    Otherwise: (skip — Business License failed, LicensePermitNameId not set)
+```
+The `logEntries` `object` label is `"BusinessLicenseApplication (LicensePermitNameId)"`, distinct from the original BLA-create log entry's `"BusinessLicenseApplication"`, same disambiguation convention as BiWeeklyPayroll's `"Invoice__c (Sent)"` vs. the AR-driven `"Invoice__c"`.
+
+Placed immediately after Business License creation in both units — before Assessment, though order relative to Assessment/AQR/ContentNote doesn't functionally matter since those depend on `blaId`, not `businessLicenseId`.
+
+**BiWeeklyPayroll explicitly out of scope** — its `AddBusinessLicenseAppBiWeeklyPayroll` Flow Structure (section 7) is unchanged; no `LicensePermitNameId` Update step there.
+
+**Not yet built/tested in Studio.**
 
 ---
 
