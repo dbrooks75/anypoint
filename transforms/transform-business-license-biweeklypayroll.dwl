@@ -26,7 +26,7 @@ var issueDateTime = toDateTime(issueDate)
 var periodEndDateTime = toDateTime(periodEndDate)
 
 var expiredDate = parseDate(vars.row.DateExpired)
-var status = if (expiredDate == null or (now() as Date) < expiredDate) "Verified" else "Inactive"
+var status = if (expiredDate == null or (now() as Date) < expiredDate) "Active" else "Expired"
 ---
 {
     AccountId: vars.accountId,

@@ -1696,7 +1696,7 @@ Flow Reference: AddContactsBiWeeklyPayroll
 - `Issue_Date__c` = `PeriodStart` = the **later** of `DateApproved`/`DateRenewed` (null-safe: if only one is set, use it; if both null, result is null).
 - `PeriodEnd` = the **later** of `DateExpired`/`DateRevoked` (same null-safe logic).
 - `Expiration_Date__c` = hardcoded `null` — not derived at all for this unit.
-- `Status` (Active/Inactive equivalent) = `"Verified"` if `DateExpired` is null **or** today's date is before `DateExpired`; otherwise `"Inactive"`. Independent of BLA's own `Status` derivation — not reused.
+- `Status` = `"Active"` if `DateExpired` is null **or** today's date is before `DateExpired`; otherwise `"Expired"` (**revised 2026-08-11** — was `"Verified"`/`"Inactive"`, same condition just relabeled). Independent of BLA's own `Status` derivation — not reused. This is License (BL) status, distinct from BLA (Application) status — see that field's own note below.
 
 Built `transform-bla-biweeklypayroll.dwl` and `transform-business-license-biweeklypayroll.dwl` implementing all confirmed BLA/BusinessLicense rules. `transform-business-license-biweeklypayroll.dwl` introduces a null-safe `laterDate(a, b)` helper (parses both with `M/d/yyyy`, returns whichever is later, falls back to whichever one is non-null, or `null` if both are) — first use of this pattern on the project, since Jewelry/Petroleum never needed to compare two dates against each other.
 
