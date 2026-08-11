@@ -89,8 +89,7 @@ var omniJsonData = write(
     // Placeholder — see dev-questions.md for what this should actually be
     AppliedDate: |1900-01-01T12:00:00Z|,
     Category: "License",
-    // Placeholder — see dev-questions.md for what Trade__c should be for Petroleum
-    Trade__c: "TBD",
+    Trade__c: "Petroleum",
     LicenseTypeId: vars.licenseTypeId,
     Description: "Legacy License Number: " ++ licenseno,
     Omni_JSON_Data__c: omniJsonData,
