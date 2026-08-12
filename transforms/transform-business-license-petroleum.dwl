@@ -56,7 +56,9 @@ var periodStartDate =
 ---
 {
     AccountId: vars.accountId,
-    Business_License_Application__c: vars.blaId,
+    // Only linked to the BLA if the BLA itself is Approved (not Draft) — vars.blaStatus is the
+    // BLA's own computed Status, captured right after transform-bla-petroleum.dwl runs, 2026-08-12
+    Business_License_Application__c: if (vars.blaStatus == "Approved") vars.blaId else null,
     Name: "PET-" ++ licensenoPadded,
     Issue_Date__c: periodStartDate,
     PeriodStart: periodStartDateTime,

@@ -37,7 +37,9 @@ var status = if ((vars.row.SourceFileType default "") == "Current")
 ---
 {
     AccountId: vars.accountId,
-    Business_License_Application__c: vars.blaId,
+    // Only linked to the BLA if the BLA itself is Approved (not Draft) — vars.blaStatus is the
+    // BLA's own computed Status, captured right after transform-bla.dwl runs, 2026-08-12
+    Business_License_Application__c: if (vars.blaStatus == "Approved") vars.blaId else null,
     Name: jobno,
     Issue_Date__c: issueDateTime,
     PeriodStart: issueDateTime,

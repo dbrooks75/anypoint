@@ -588,6 +588,12 @@ On New or Updated File (C:\data\, LoadReadyFlag.csv)
           `SiteStreet`/`SiteCity`/`SiteStateCode`/`SitePostalCode`/`SiteCountryCode` = the Mailing
           address, same PO-Box-detection logic as `transform-address.dwl` — see Petroleum's
           equivalent fields, section 6, for the field-name discovery story via Workbench)
+          → Transform Message (transform-bla.dwl) → Set Variable: blaStatus = #[payload.Status]
+            (new 2026-08-12 — captures the BLA's own computed Status, read from the transform's
+            output before the Create wraps it in `#[[payload]]`, so `transform-business-license.dwl`
+            can gate `Business_License_Application__c` on it below; `transform-bla.dwl` and
+            `transform-business-license.dwl` are otherwise standalone files with no shared vars,
+            so this is the one value passed between them)
           → Salesforce Create Business License Application (AccountId = accountId, Records: #[[payload]]) → [Result & Log Pattern → logEntries, object: "BusinessLicenseApplication"; sets blaId]
           → Choice
               When #[vars.blaId != null]:
@@ -713,6 +719,8 @@ Invoices load oldest-first, sorted by `deposit_date` (not the pymt_type-derived 
 **`Trade__c` confirmed (2026-08-04)**: `transform-bla.dwl`'s `Business_License_Application__c.Trade__c` = hardcoded `"Industrial Homework (Jewelry Shop) Permit"` — was previously hardcoded `"Labor Standards"` (never documented here, only in the `.dwl` file). Unlike Petroleum's still-open `"TBD"` placeholder (dev question #9) and BiWeeklyPayroll's deliberate `null`, Jewelry's is a confirmed real value now.
 
 **BusinessLicense `Status` updated to match Petroleum's rule (2026-08-04)** — `transform-business-license.dwl`, previously undocumented here (only `transform-bla.dwl`'s BLA-level `Status` was written up). Old rule: `if (SourceFileType == "Current") "Active" else "Inactive"`, no AR check. New rule (confirmed `"Active"`/`"Expired"` vocabulary, matching Petroleum exactly rather than keeping Jewelry's `"Inactive"`): `SourceFileType == "Historical"` → always `"Expired"`; `SourceFileType == "Current"` → `"Active"` if that `jobno` has a `2026` `deposit_date` in `vars.laborArRows`, else `"Expired"`. Own local `matchingArRows`/`hasCurrentYearDeposit` computation inside `transform-business-license.dwl` (same values `transform-bla.dwl` computes, duplicated per-file per this project's "no shared vars across transform files" convention). **`Issue_Date__c`/`PeriodStart`/`PeriodEnd`/`Expiration_Date__c` are unchanged** — Jewelry derives these from the real `issue_date` field (last day of month before issue-month, +1 year), independent of `SourceFileType` and independent of AR data entirely; unlike Petroleum (which only has a year-only `license_issued` column and had to derive its date window from the 2026-deposit check instead), there's nothing for the new payment check to plug into here.
+
+**BusinessLicense `Business_License_Application__c` (the BL's own lookup back to its parent BLA) gated on BLA `Status` (2026-08-12)** — previously unconditionally `vars.blaId`. Now: `vars.blaId` if the BLA is `"Approved"` (not `"Draft"`), else `null`. Requires `vars.blaStatus` (the BLA's own computed `Status`, captured right after `transform-bla.dwl` runs, before its Create step — see Flow Structure above) since `transform-bla.dwl` and `transform-business-license.dwl` are otherwise standalone files with no shared vars. **Applies to Petroleum too** (`transform-business-license-petroleum.dwl`, same `vars.blaStatus` gate) — **not BiWeeklyPayroll**, which wasn't part of this change.
 
 ### Field Mapping
 
@@ -1102,7 +1110,10 @@ For Each row: (Collection: #[vars.mercStdRows])
         full per-question AQR answer list from vars.row/vars.aqvMap/vars.deliveryVehiclesJson,
         doesn't need assessmentId/blaId) → Set Variable: aqrQuestions = payload
     → Flow Reference: AddBusinessLicenseAppPetroleum
-        → Transform Message (transform-bla-petroleum.dwl)
+        → Transform Message (transform-bla-petroleum.dwl) → Set Variable: blaStatus =
+          #[payload.Status] (new 2026-08-12 — same reasoning as Jewelry's equivalent step,
+          section 2: captures BLA's own computed Status so transform-business-license-petroleum.dwl
+          can gate Business_License_Application__c on it below)
         → Salesforce Create Business License Application (AccountId = accountId, Records: #[[payload]])
           → [Result & Log Pattern → logEntries, object: "BusinessLicenseApplication"; sets blaId]
         → Choice
