@@ -410,7 +410,7 @@ Columns now parse directly into named fields via the CSV header (`header: true`)
 | 11 | add1 | → BillingStreet line 1 |
 | 12 | add2 | → BillingStreet line 2 |
 | 13 | city | → BillingCity |
-| 14 | state | → BillingState |
+| 14 | state | → `BillingStateCode` (revised 2026-08-12, was `BillingState` via a `stateNames` lookup — see `transform2-account.dwl`) |
 | 15 | change_of_addr | |
 | 16 | date_changed | |
 | 17 | out_of_business | |
@@ -984,7 +984,7 @@ File Read (Path: C:\data\MercAR.csv)
 The vehicles file reads + `transform-vehicles-combine.dwl` join (see Vehicles Flow Structure above) feed into `vars.truckRows`, then `InitAssessmentQuestionVersionPetroleum`/`InitAccountRecordTypePetroleum` sub-flows run once (see above), then the main `For Each` over `vars.mercStdRows` starts.
 
 **Account/Contact field mismatches vs. Jewelry** — `MercStd.csv` has a very different shape than `LaborStd.csv` for these two objects, caught after assuming Jewelry's `transform2-account.dwl`/`transform-contact.dwl` fields would carry over:
-- **Account** (`transform-account-petroleum.dwl`, new file) — Jewelry's account fields (`fein`, `name`, `company`, `bustype`, `sic`) don't exist on `MercStd`. Petroleum only populates: `RecordTypeId` (`vars.accountRecordTypeId`), `Name` ← `compname`, `DBA_Name__c` ← `respparty`, `BillingStreet`/`BillingCity`/`BillingState`/`BillingPostalCode` (same `add1`+`add2`/`city`/`state`/`zip` logic as Jewelry, `stateNames` lookup duplicated in the new file). No `Federal_Tax_ID__c`, `Business_Entity_Type__c`, or `SicDesc` — left unset entirely, not even null.
+- **Account** (`transform-account-petroleum.dwl`, new file) — Jewelry's account fields (`fein`, `name`, `company`, `bustype`, `sic`) don't exist on `MercStd`. Petroleum only populates: `RecordTypeId` (`vars.accountRecordTypeId`), `Name` ← `compname`, `DBA_Name__c` ← `respparty`, `BillingStreet`/`BillingCity`/`BillingPostalCode` (same `add1`+`add2`/`city`/`zip` logic as Jewelry). No `Federal_Tax_ID__c`, `Business_Entity_Type__c`, or `SicDesc` — left unset entirely, not even null. **`BillingStateCode` (revised 2026-08-12, supersedes `BillingState`)**: `upper(vars.row.state default "")` — the `stateNames` 2-letter→full-name lookup table was dropped here entirely; Petroleum now sets the state-code field directly, uppercased, instead of resolving to a full state name. **Same-day change applied to all three work units** — Jewelry (`transform2-account.dwl`) and BiWeeklyPayroll (`transform-account-biweeklypayroll.dwl`) both made the identical switch; `stateNames` no longer exists in any Account transform on this project.
 - **Contact** (`transform-contact-petroleum.dwl`, new file) — Jewelry's `respparty1`-`respparty4` free-text-with-title pattern doesn't apply; `MercStd` has exactly one already-structured contact: `contact_fname`/`contact_mi`/`contact_lname` (no parsing needed), `contact_area_code`+`contact_telephone` → `Phone` (format assumption: `"area-telephone"`, not yet confirmed), `email_addr` → `Email` (Jewelry's Contact creation never sets one), `Title` hardcoded `"Petroleum"` (not derived, unlike Jewelry's title-parsing). **Only created if `contact_fname` or `contact_lname` is non-blank** — unlike Jewelry's up-to-4 loop, this is a single optional Contact, so the transform returns `[]` (not a list with a mostly-empty record) when both are blank.
 
 **Issue-date equivalent** — Jewelry's `transform-business-license.dwl`/`transform-assessment.dwl`/`transform-partyaddress.dwl` all derive their date fields from `vars.row.issue_date`, which doesn't exist on `MercStd` either. Confirmed: use `date_issued` for all three (same field already used for the "PET Date App Received" AQR question) — new files `transform-business-license-petroleum.dwl`, `transform-assessment-petroleum.dwl`, `transform-partyaddress-petroleum.dwl`, otherwise identical to Jewelry's, `M/d/yyyy` format per the existing MercStd date-format assumption (also now Jewelry's own format since `issue_date` was retyped to Short Text 2026-07-21 — see section 3's Date Format note).
@@ -1506,12 +1506,12 @@ Run once at flow start, same as Petroleum's `InitAccountRecordTypePetroleum` (se
 | `Business_Entity_Type__c` | — | Hardcoded `"Customer"` — not a lookup like Jewelry's `businessEntityTypes` map (`bustype` → Sole Proprietorship/Corporation/etc.); BiWeeklyPayroll has no equivalent source field |
 | `BillingStreet` | `CompanyAddr` | Single field, no add1/add2 concat needed (no separate address-line-2 column in this file) |
 | `BillingCity` | `CompanyCity` | |
-| `BillingState` | `CompanyState` | Same `stateNames` 2-letter→full-name lookup table as Jewelry/Petroleum (`transform2-account.dwl`/`transform-account-petroleum.dwl`), fallback to raw value if not found |
+| `BillingStateCode` | `CompanyState` | `upper(vars.row.CompanyState default "")` (revised 2026-08-12, was `BillingState` via the same `stateNames` 2-letter→full-name lookup table Jewelry/Petroleum originally used, fallback to raw value if not found). All three work units made this same change the same day — `stateNames` no longer exists in any Account transform on this project. |
 | `BillingPostalCode` | `CompanyZip` | |
 | `Preferred_Method_of_Comm__c` | — | Hardcoded `"Mail"` (2026-07-15) — same for all three units (Jewelry `transform2-account.dwl`, Petroleum `transform-account-petroleum.dwl`, BiWeeklyPayroll `transform-account-biweeklypayroll.dwl`); no source field, new Account field added across all three at once |
 | `Conversion_Identifier__c` | — | Hardcoded `"R1-Conversion"` (2026-07-28) — same for all three units, same "no source field, added across all three at once" pattern as `Preferred_Method_of_Comm__c` above |
 
-Built `transform-account-biweeklypayroll.dwl` (new file) implementing this — `fixFein` and `stateNames` duplicated in-file, same pattern as Petroleum's copy in `transform-account-petroleum.dwl`.
+Built `transform-account-biweeklypayroll.dwl` (new file) implementing this — `fixFein` duplicated in-file, same pattern as Jewelry's/Petroleum's own copies (`transform2-account.dwl`/`transform-account-petroleum.dwl`). `stateNames` was originally duplicated here too, but all three work units dropped it 2026-08-12 in favor of `BillingStateCode: upper(state)` (see above).
 
 Not yet covered here: `RIagent*` block (still open — likely a Contact, not confirmed).
 
