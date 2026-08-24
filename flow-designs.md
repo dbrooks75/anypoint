@@ -2315,7 +2315,76 @@ Salesforce Query: SELECT Id, Payment_Method__c, ReferenceNumber__c, PaymentDate_
 
 ---
 
-## PostgreSQL Reconciliation Log (deferred — see TODO above)
+## 14. Next Work Unit: Elevators (In Progress) — Import Layer Only So Far
+
+Fourth work unit, after Jewelry/Petroleum/BiWeeklyPayroll. Source data (Rhode Island DLT elevator registration/licensing/inspection/payment records) is structurally similar to Petroleum in shape (Current/Historical `.unl` pairs, positional columns, no header) but considerably larger — **15 raw source tables** instead of 2-4. Scope so far is deliberately narrow: **only the `.unl` → `.csv` import layer** (get raw files into a shape Access can import), not yet the Salesforce object mapping — that's explicitly deferred, see Open Items below.
+
+### Source tables (confirmed 2026-08-24)
+15 raw tables collapse into **6 entities**, each combining into one Access table via a `SourceFileType` column, plus one standalone lookup table with no historical counterpart:
+
+| Entity | Current source | Historical source(s) | `SourceFileType` values |
+|---|---|---|---|
+| `company` (elevator owners — individuals, healthcare facilities, hotels, universities; ~3,700 owners) | `company.unl` | `hi_company.unl`, `hi_company_pr.unl` | `Current` / `Historical` / `Private` |
+| `elevator` (uniquely identifies each elevator — install location, inspection dates, certificate number, technical specs) | `elevator.unl` | `his_elev.unl`, `hi_elevator_pr.unl` | `Current` / `Historical` / `Private` |
+| `comp_lic` (installer/maintenance companies registered with DLT) | `comp_lic.unl` | `hi_comp_lic.unl` | `Current` / `Historical` |
+| `license` (individual mechanic licenses, license type `"M"`) | `license.unl` | `hi_license.unl` | `Current` / `Historical` |
+| `payments` (invoices + payments received against them) | `payments.unl` | `hi_payments.unl` | `Current` / `Historical` |
+| `violation` (inspection violations, delinquent-renewal tracking) | `violation.unl` | `hist_viol.unl` | `Current` / `Historical` |
+| `classification` (elevator classification codes/descriptions — lookup table, 2 columns/10 rows) | `classification.unl` | none | n/a — no `SourceFileType` |
+
+**`company`/`elevator`'s three-way split, confirmed 2026-08-24**: unlike the other four entities' simple Current/Historical pair, these two each have their historical data pre-split by a **"private"** flag into two separate source tables (meaning of "private" itself not yet confirmed/needed for this import-layer scope — deferred, see Open Items). Confirmed the split applies **only to historical data** — `company.unl`/`elevator.unl` (Current) remain single, unsplit source files. Confirmed both `company`'s and `elevator`'s Historical/Private source files share the **exact same column layout** as their Current counterpart (not a different shape), so one shared parse/rename transform per entity covers all three source files, same as the other four entities' two.
+
+**File format**: pipe-delimited `.unl`, no header row, positional columns — confirmed 2026-08-24, same as every other work unit on this project.
+
+### Confirmed column lists (2026-08-24)
+`classification` is the only one not yet provided (2 columns/10 rows, user supplying separately).
+
+**`company`** (14 columns): `recnumb, predacc, acc, name, respparty, add1, add2, city, state, zip, batchid, phone, fax, email`
+
+**`elevator`** (72 columns): `serial_no, recnumb, co_license_no, device_active, building, name, add1, add2, city, last_insp_date, insp_date_due, next_insp_date, insp_by, certif_date, certif_num, safetest_date, classification, unit_no, location, bill_and_issue, bill_and_hold, no_chg_and_issue, no_chg_and_hold, manuf_by, carry_capacity, year_made, mach_type, control_type, car_safety_dev, loc_safety_dev, typ_safety_dev, overspeed_gov, trip_at, car_speed, current_acdc, no_cables, hoist_size, cwt_size, gov_size, form_of_drive, height, pit_depth, no_entrances, landing_gate, guid_rail_matl, interlocks, fire_rated, accessibility, out_of_service, oos_date, viol_letter, letter_date, rule_numbers, safety_test, under_repair, non_use, modernize, certif_held, broken_rope, dormant, batchid, three_year, five_year, safedate, permit_type, reinsp_date, reinsp_by, date_15days, final_date, install_code, alteration_date, permit_date`
+— **`oos_date` note**: the raw source label for this column reads like two words ("oos_date date"); confirmed 2026-08-24 this is genuinely one column, persisted here under the simplified name `oos_date`.
+
+**`comp_lic`** (30 columns): `license_category, license_type, license_ai, co_license_no, expire_date, recnumb, name, add1, add2, city, state, zip, date_first_issued, fee, invoice_no, date_paid, next_page, warning_date_1, reason_1, warning_date_2, reason_2, warning_date_3, reason_3, suspend_date, reason_suspend, phone, status, date_entered, comment, batchid`
+— confirmed **no** `recnum` field (only `recnumb`) — a real difference from `license` below, not an omission.
+
+**`license`** (33 columns): `license_category, license_type, license_ai, license_no, lic_name, lic_add1, lic_add2, lic_city, lic_state, lic_zip, expire_date, ssno, recnum, recnumb, employed_by, co_license_no, date_first_issued, fee, invoice_no, date_paid, next_page, warning_date_1, reason_1, warning_date_2, reason_2, warning_date_3, reason_3, suspend_date, reason_suspend, status, date_entered, comment, batchid`
+— confirmed **both** `recnum` and `recnumb` exist as distinct columns here.
+
+**`payments`** (62 columns): `recnumb, predacc, acc, bill_or_pay, hold_certif, invoice_no, invoice_date, location, insp_date, amt_billed, prev_billed, not_billed, no_charge, other, state_or_insur, certif_begin, certif_end, miscellaneous, s_ins_fee_pas_hyd, s_ins_fee_frt_hyd, s_insp_fee_escal, s_ins_fee_mvgwalk, s_insp_fee_dumb, s_insp_fee_vwcl, s_ins_fee_elevet, recip_convey, s_ins_fee_iwcl, s_ins_fee_matllift, reinsp_elev, reinsp_other, delq_pymt, dup_certif, insp_exam_renew, comp_lic_renew, mech_lic_renew, appr_lic_renew, new_install, fines, misc_bill_amt, i_ins_fee_pas_hyd, i_ins_fee_pas_cab, i_ins_fee_frt_hyd, i_ins_fee_frt_cab, i_insp_fee_escal, i_insp_fee_dumb, i_insp_fee_vwcl, i_ins_fee_elevet, paidp, payrecdate, amtreceived, receivedby, credit_card, check_no, moneyord_no, cashrecpt_no, deposit_voucher, deposit_date, batchid, overtime_hrs, s_ins_fee_strlift, delinquent, ltr_printed_date`
+
+**`violation`** (42 columns): `recnumb, unit_no, batchid, owc_ltr1_date, owc_ltr2_date, owc_ltr3_date, shutdown_ltr_date, first_ltr_date, reas_time_no, first_15day_flg, viol_abtmnt_date, full_compl_date, comments, data_entry_date, updated_last, first_hear_status, first_hear_date, sec_ltr_date, penalty_date, sec_15day_flg, sec_hear_status, sec_hear_date, third_ltr_date, cert_revo_date, third_15day_flg, third_hear_status, third_hear_date, fine_amt_pd, date_fine_pd, viol_status, owc_ltr_printed, day_31_viol, day_46_viol, day_91_viol, viol_shutdown, day_31_owc, day_46_owc, day_91_owc, owc_shutdown, hearing_date, shutdown_date, abate_date`
+
+### Import transforms built (2026-08-24)
+Twelve new files — one parse/rename + one combine-export per entity (six entities), mirroring the `ImportSourceData`/`transform-laborstd-raw-name.dwl` + `transform-laborstd-combine-export.dwl` pattern already established for Jewelry, extended to a 3-way concat for `company`/`elevator`:
+
+| Entity | Parse/rename transform | Combine-export transform |
+|---|---|---|
+| `company` | `transform-company-raw-name.dwl` | `transform-company-combine-export.dwl` |
+| `elevator` | `transform-elevator-raw-name.dwl` | `transform-elevator-combine-export.dwl` |
+| `comp_lic` | `transform-comp-lic-raw-name.dwl` | `transform-comp-lic-combine-export.dwl` |
+| `license` | `transform-elevator-license-raw-name.dwl` | `transform-elevator-license-combine-export.dwl` |
+| `payments` | `transform-elevator-payments-raw-name.dwl` | `transform-elevator-payments-combine-export.dwl` |
+| `violation` | `transform-violation-raw-name.dwl` | `transform-violation-combine-export.dwl` |
+
+**Naming note**: `license`/`payments`' transforms are prefixed `transform-elevator-*` (not the bare `transform-license-*`/`transform-payments-*` the other four entities use) specifically to avoid collision/confusion with this project's existing `license`-adjacent terminology (`vars.licenseTypeId`, BusinessLicense/RegulatoryAuthorization) and the existing singular `transform-payment.dwl`/`transform-payment-petroleum.dwl` (Jewelry/Petroleum's `Payment__c` create transforms) — these Elevators tables are unrelated objects that happen to share a name. **Not yet confirmed with the user whether this naming convention is preferred** — flag if a different scheme is wanted.
+
+**Each parse/rename transform**:
+- Reads the raw pipe-delimited `.unl` (`quoteChar="\u0000"`, disabling quote interpretation — same fix as the truck imports, section 6).
+- Trims every field (`trim(v default "")`, applied uniformly before column mapping) — same defensive default established for truck imports, 2026-08-17.
+- Maps values positionally onto the confirmed column list via the same `pluck`/`reduce` pattern as `transform-laborstd-raw-name.dwl`/`transform-trucks-raw-name.dwl`.
+- Appends `SourceFileType` from `vars.sourceFileType` (set to `"Current"`/`"Historical"`/`"Private"` before each call — same convention as `transform-laborstd-raw-name.dwl`, extended to three values for `company`/`elevator`).
+
+**Each combine-export transform** concatenates the parsed row-sets (2-way for four entities, 3-way for `company`/`elevator`) and writes `output application/csv header=true, quoteValues=true` — note this uses `header=true`/`quoteValues=true` from the start (unlike the original `transform-laborstd-combine-export.dwl`, written before those were established as necessary fixes) since both are now known-needed, not something to retrofit later.
+
+**No decimal-artifact stripping applied yet** — unlike the truck imports (`licenseno`/`year<N>` confirmed `.0`-suffixed) or Jewelry/Petroleum's `padZip`/`fixFein`, none of these 15 Elevators tables have been confirmed to hit the Access-exported-numeric-column `.0` artifact on any specific field. Given how many fields here plausibly look Access-numeric (`recnumb`, `invoice_no`, various fee/amount columns), this is flagged as a real risk to watch for once real data is tested — not preemptively coded around, since guessing which fields need it risks corrupting a field that legitimately contains a period (matches this project's established pattern of discovering these issues empirically rather than guessing).
+
+### Open items
+- `classification` column list — user supplying separately (2 columns, 10 rows, no historical pair).
+- **What "private" means** for the `company`/`elevator` split — not yet needed for the import layer, deferred.
+- **Cross-table relationships/join keys** — explicitly deferred by the user (2026-08-24): `recnumb` appears on `elevator`/`payments`/`comp_lic`/`license`/`violation`, `license` additionally has a distinct `recnum` field, and `co_license_no` appears on both `elevator` and `license` — whether these represent one consistent join key or multiple different relationships (e.g. elevator→owner via `recnumb` vs. elevator/license→installer-company via `co_license_no`) is unresolved. Don't assume a join structure without asking.
+- Salesforce object mapping — not started. Given the source data's breadth (companies, owners, elevators, licenses, violations, payments), this will likely need new/different Salesforce objects beyond the BLA/BusinessLicense/Assessment pattern the other three work units share — nothing assumed yet.
+- Decimal-artifact risk (see above) — untested against real data.
+- **Not yet built/tested in Studio at all** — this is `.dwl` transform files + this doc section only so far.
 
 ### DDL
 ```sql
