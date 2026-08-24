@@ -2220,6 +2220,101 @@ Placed immediately after Business License creation in both units — before Asse
 
 ---
 
+## 13. `JewelryUpdates` — Post-Load Maintenance Flow (new, 2026-08-24)
+
+**Purpose**: with Jewelry data live in production, delete-and-reload is no longer an acceptable way to fix/backfill already-loaded accounts (unlike earlier in the project, where re-running the full load was the standard fix for any import change). `JewelryUpdates` is a new, separate flow for applying targeted updates to specific already-loaded accounts, designed to support multiple different update types as new needs come up — not just the one (`AddPaymentNotes`) it launches with.
+
+**Scope mechanism**: unlike the delete/verify flows (sections 1/12-adjacent, jobno-list-in-a-CSV pattern), `JewelryUpdates` reuses the **same `LaborStd.csv`/`LaborAR.csv` file shape** the main load flow already reads — but for a run of this flow, those files are expected to contain **only the rows for the accounts being updated**, pre-scoped externally (e.g. via the same `IsExported`-flag Access mechanism used to scope small test batches, see section 0's `ExportCandidates` note). No jobno filtering happens inside this flow itself.
+
+**Update-type selection**: runtime, not build-time — a separate trigger file, `JewelryUpdatesTrigger.csv`, carries an `updateType` value (single row, one column) that a `Choice` reads to decide which sub-flow to call, per `LaborStd` row. Adding a new update type later means adding one more `When` branch plus its own sub-flow — the per-row `blaId`/`matchingArRows` setup above it is shared by all update types, not duplicated per type.
+
+### Trigger — `JewelryUpdatesTrigger.csv`
+Same `On New or Updated File` convention as the rest of this project: Directory `C:\data\`, File Name Pattern `JewelryUpdatesTrigger.csv`, Min Size `1`, polling interval `10` seconds. Content matters here (unlike `LoadReadyFlag.csv`'s sentinel-only role) — one row, one column, `updateType` (e.g. `AddPaymentNotes`).
+
+### Flow Structure (`JewelryUpdates`)
+```
+On New or Updated File (C:\data\, JewelryUpdatesTrigger.csv)
+  → Logger: "JewelryUpdates process starting"
+  → File Read: C:\data\JewelryUpdatesTrigger.csv
+  → Transform Message (parse CSV) → Set Variable: updateType = #[payload[0].updateType]
+  → File Read: C:\data\LaborStd.csv
+  → Transform Message (transform1-filter-and-name.dwl — reused as-is)
+  → Set Variable: laborStdRows = payload
+  → File Read: C:\data\LaborAR.csv
+  → Transform Message (transform-ar-filter-and-name.dwl — reused as-is)
+  → Set Variable: laborArRows = payload
+  → For Each (Collection: #[vars.laborStdRows])
+      → Set Variable: row = payload
+      → Set Variable: matchingArRows = #[vars.laborArRows filter (r) -> r.jobno == vars.row.jobno]
+      → Set Variable: jobno = #[(vars.row.jobno default "") replace "'" with "\\'"]
+      → Salesforce Query: SELECT Id, AccountId, Business_License_Application__c FROM BusinessLicense
+          WHERE Name = ':jobno' (Parameters: #[{jobno: vars.jobno}])
+      → Choice
+          When #[sizeOf(payload default []) > 0]:
+              → Set Variable: accountId = #[payload[0].AccountId]
+              → Set Variable: blaId = #[payload[0].Business_License_Application__c]
+              → Choice
+                  When #[vars.updateType == "AddPaymentNotes"]:
+                      → Flow Reference: AddPaymentNotes
+                  Otherwise:
+                      → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+                            jobno: vars.jobno, object: "JewelryUpdates", status: "Skipped - Unknown updateType",
+                            salesforce_id: null, error_code: null,
+                            error_message: "updateType: " ++ (vars.updateType default "")
+                        }]
+          Otherwise:
+              → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+                    jobno: vars.jobno, object: "BusinessLicense", status: "Not Found",
+                    salesforce_id: null, error_code: null,
+                    error_message: "No BusinessLicense found with this Name"
+                }]
+  → Choice
+      When #[sizeOf(vars.logEntries default []) > 0]:
+          → Set Variable: logFilename = #["C:\data\jewelry_updates_log_" ++ (now() as String {format: 'yyyyMMdd_HHmm'}) ++ ".csv"]
+          → File Write: #[vars.logFilename] (same quoteValues=true multi-line-script pattern as delete_log.csv)
+      Otherwise: (skip — nothing to report)
+```
+
+### `AddPaymentNotes` sub-flow
+Reads `vars.jobno`/`vars.blaId`/`vars.matchingArRows` — already scoped per row by the main flow above, no input params needed. Queries `Payment__c` directly on `BusinessLicenseApplication__c = :blaId` (no `Invoice__c` hop — `Payment__c.BusinessLicenseApplication__c` is already set directly at Create time, see `transform-payment.dwl`), matches each result against `vars.matchingArRows` via the same `pymt_type`/reference-number discriminator logic as the load flow, and updates `Payment__c.Notes__c` on an exact single match.
+
+**Note content, confirmed 2026-08-24** — five `LaborAR.csv` fields: `deposit_voucher`, `deposit_date`, `budget_acc1`, `budget_acc2`, `remarks`.
+
+New transforms:
+- **`transform-payment-note-match.dwl`** — resolves the reference-number column from `Payment_Method__c` (`"Check"`→`check_no`, `"Cash"`→`cash_recpt_no`, `"Money Order"`→`mo_ord_no`, same discriminator as section 3's `pymt_type` table), decimal-strips it (`stripDecimal`, same pattern as `padZip` elsewhere), and filters `vars.matchingArRows` to rows matching both that reference number and `deposit_date` (parsed `M/d/yyyy`, compared against `PaymentDate__c`). Returns `{ matchCount, matchedRow }` rather than just a matched-row-or-null — `matchedRow` is only non-null when `matchCount == 1`, but the count itself lets the caller's log distinguish "no match" (0) from "ambiguous" (>1) instead of collapsing both into the same message. **`PaymentDate__c`'s exact type as returned by the Salesforce connector (native `Date` vs. an ISO string needing coercion) is not yet confirmed against a real query response in Studio** — the `as Date` coercion is written defensively but untested.
+- **`transform-payment-note-update.dwl`** — builds `{ Id: vars.payment.Id, Notes__c: <five fields, labeled and semicolon-joined> }` for the Update.
+
+```
+Salesforce Query: SELECT Id, Payment_Method__c, ReferenceNumber__c, PaymentDate__c
+    FROM Payment__c WHERE BusinessLicenseApplication__c = ':blaId'
+    (Parameters: #[{blaId: vars.blaId}])
+→ For Each (Collection: #[payload])
+    → Set Variable: payment = payload
+    → Transform Message (transform-payment-note-match.dwl)
+    → Set Variable: matchResult = payload
+    → Choice
+        When #[vars.matchResult.matchedRow != null]:
+            → Set Variable: matchedArRow = #[vars.matchResult.matchedRow]
+            → Transform Message (transform-payment-note-update.dwl)
+            → Salesforce Update Payment__c (Records: #[[payload]])
+            → [Result & Log Pattern → logEntries, object: "Payment__c (Notes)"]
+        Otherwise:
+            → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+                  jobno: vars.jobno, object: "Payment__c (Notes)", status: "Skipped - No Match",
+                  salesforce_id: vars.payment.Id, error_code: null,
+                  error_message: "AR row match count: " ++ (vars.matchResult.matchCount as String)
+              }]
+```
+
+**Production-safety notes, before this ever runs against real data**:
+1. **Unconditional overwrite** — `Notes__c` is always set from the matched AR row's five fields; Jewelry's `Payment__c` has never populated this field before (unlike Petroleum's, which sets it to bank info), but if any production record already has a manually-entered note, this would clobber it. Worth a `SELECT Id FROM Payment__c WHERE Notes__c != null` check on the target BLAs before running, first time.
+2. **Second Update operation on this project** (after section 12's BLA `LicensePermitNameId`) — same caution applies: verify the Update response shape empirically (`Logger: #[payload]`) before trusting the Result & Log Pattern's extraction script.
+3. **Ambiguous-match risk** — if two AR rows for the same jobno share the same `pymt_type`, reference number, and `deposit_date`, `matchCount` will be `2`+ and the payment is skipped (logged, not guessed at) rather than risking a wrong note.
+
+**Not yet built/tested in Studio.**
+
+---
+
 ## PostgreSQL Reconciliation Log (deferred — see TODO above)
 
 ### DDL
