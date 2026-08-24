@@ -2385,7 +2385,7 @@ Thirteen new files — one parse/rename + one combine-export per entity for the 
 **Trigger** — proposed `ElevatorsSourceDataReadyFlag.csv` (adjust if a different name is wanted), same convention as `SourceDataReadyFlag.csv`/`LoadReadyFlagPetroleum.csv`: Directory `C:\data\`, Min Size `1`, polling interval `10` seconds, created only once all 15 raw `.unl` files are in place.
 
 **Two new shared transforms** (reused across every entity/file, not per-entity):
-- **`transform-elevator-column-count-check.dwl`** — runs on the raw parsed payload *before* renaming. Parameterized via `vars.expectedColCount` (set before each call). Returns `{ totalRows, expectedColCount, mismatchCount, mismatches: [{rowIndex, actualCount}] }` — flags any row whose raw field count doesn't match the confirmed schema, since neither a too-short nor too-long row throws on its own (a short row leaves trailing renamed fields `null`; a long row silently drops the extras).
+- **`transform-elevator-column-count-check.dwl`** — called directly on the raw `File Read` output, *before* the entity's raw-name transform runs. Has its **own** `input payload application/csv separator="|", quoteChar="\u0000"` directive (matching every raw-name transform's parse settings) — corrected 2026-08-25, originally missing, which would have failed immediately since a `.unl` extension doesn't auto-detect as CSV and nothing upstream had parsed the payload yet. Parameterized via `vars.expectedColCount` (set before each call). Returns `{ totalRows, expectedColCount, mismatchCount, mismatches: [{rowIndex, actualCount}] }` — flags any row whose raw field count doesn't match the confirmed schema, since neither a too-short nor too-long row throws on its own (a short row leaves trailing renamed fields `null`; a long row silently drops the extras).
 - **`transform-elevator-drop-blank-rows.dwl`** — runs on the renamed row objects, right after each raw-name transform. A row counts as blank if every field except `SourceFileType` is empty after trim. Returns `{ keptRows, sourceCount, keptCount, droppedCount }`. Confirmed 2026-08-24: blank rows get **dropped**, with the count logged — not silently passed through, and not silently discarded without a trace either.
 
 **Audit log shape** (distinct from the Result & Log Pattern's `logEntries` used everywhere else — this never touches Salesforce, it's purely pre-Access):
@@ -2404,9 +2404,10 @@ On New or Updated File (C:\data\, ElevatorsSourceDataReadyFlag.csv)
 
   → Try
       File Read (Path: C:\data\company.unl)
-      → [explicit CSV metadata on the Transform Message's Input panel: header:false, separator:"|"
-          — same reason as laborstd.txt/his_lab.txt, a .unl extension doesn't auto-detect as CSV]
-      → Transform Message (transform-elevator-column-count-check.dwl, vars.expectedColCount = 14)
+      → Transform Message (transform-elevator-column-count-check.dwl, vars.expectedColCount = 14
+          — parses the raw payload itself via its own input directive, no separate Studio-level
+          Input-panel metadata configuration needed, unlike the older laborstd.txt/his_lab.txt
+          pattern (section 2) which predates transforms declaring their own input directive)
       → Set Variable: colCheckResult = payload
       → Set Variable: auditEntries = (vars.auditEntries default []) ++ [{
             entity: "company", file: "company.unl", check: "ColumnCount", expected: 14, actual: null,
