@@ -2380,7 +2380,7 @@ Thirteen new files — one parse/rename + one combine-export per entity for the 
 
 **No decimal-artifact stripping applied yet** — unlike the truck imports (`licenseno`/`year<N>` confirmed `.0`-suffixed) or Jewelry/Petroleum's `padZip`/`fixFein`, none of these 15 Elevators tables have been confirmed to hit the Access-exported-numeric-column `.0` artifact on any specific field. Given how many fields here plausibly look Access-numeric (`recnumb`, `invoice_no`, various fee/amount columns), this is flagged as a real risk to watch for once real data is tested — not preemptively coded around, since guessing which fields need it risks corrupting a field that legitimately contains a period (matches this project's established pattern of discovering these issues empirically rather than guessing).
 
-### `ImportSourceDataElevators` — Studio Flow Structure + Audit Logging (designed 2026-08-24, not yet built in Studio)
+### `ImportSourceDataElevator` — Studio Flow Structure + Audit Logging (designed 2026-08-24, not yet built in Studio)
 
 **Trigger** — proposed `ElevatorsSourceDataReadyFlag.csv` (adjust if a different name is wanted), same convention as `SourceDataReadyFlag.csv`/`LoadReadyFlagPetroleum.csv`: Directory `C:\data\`, Min Size `1`, polling interval `10` seconds, created only once all 15 raw `.unl` files are in place.
 
@@ -2398,9 +2398,9 @@ Written once at the end to `C:\data\elevator_import_audit_<yyyyMMdd_HHmm>.csv` (
 
 **Fully worked example — `company` (3-way: Current/Historical/Private)**:
 ```
-Flow: ImportSourceDataElevators
+Flow: ImportSourceDataElevator
 On New or Updated File (C:\data\, ElevatorsSourceDataReadyFlag.csv)
-  → Logger: "ImportSourceDataElevators process starting"
+  → Logger: "ImportSourceDataElevator process starting"
 
   → Try
       File Read (Path: C:\data\company.unl)
