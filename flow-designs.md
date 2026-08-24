@@ -2337,7 +2337,6 @@ Fourth work unit, after Jewelry/Petroleum/BiWeeklyPayroll. Source data (Rhode Is
 **File format**: pipe-delimited `.unl`, no header row, positional columns — confirmed 2026-08-24, same as every other work unit on this project.
 
 ### Confirmed column lists (2026-08-24)
-`classification` is the only one not yet provided (2 columns/10 rows, user supplying separately).
 
 **`company`** (14 columns): `recnumb, predacc, acc, name, respparty, add1, add2, city, state, zip, batchid, phone, fax, email`
 
@@ -2354,8 +2353,10 @@ Fourth work unit, after Jewelry/Petroleum/BiWeeklyPayroll. Source data (Rhode Is
 
 **`violation`** (42 columns): `recnumb, unit_no, batchid, owc_ltr1_date, owc_ltr2_date, owc_ltr3_date, shutdown_ltr_date, first_ltr_date, reas_time_no, first_15day_flg, viol_abtmnt_date, full_compl_date, comments, data_entry_date, updated_last, first_hear_status, first_hear_date, sec_ltr_date, penalty_date, sec_15day_flg, sec_hear_status, sec_hear_date, third_ltr_date, cert_revo_date, third_15day_flg, third_hear_status, third_hear_date, fine_amt_pd, date_fine_pd, viol_status, owc_ltr_printed, day_31_viol, day_46_viol, day_91_viol, viol_shutdown, day_31_owc, day_46_owc, day_91_owc, owc_shutdown, hearing_date, shutdown_date, abate_date`
 
+**`classification`** (2 columns, lookup table, no historical pair): `elev_class, elev_desc`. Confirmed values, 13 rows (not the originally estimated 10): `A`=Wind Turbine, `D`=Dumbwaiter, `E`=Escalator, `F`=Freight, `H`=Personal Hoist, `I`=IPL, `L`=LULA, `M`=Material Lift, `P`=Passenger, `S`=Stairlift, `T`=Private Elevette, `V`=VPL, `W`=MVWK.
+
 ### Import transforms built (2026-08-24)
-Twelve new files — one parse/rename + one combine-export per entity (six entities), mirroring the `ImportSourceData`/`transform-laborstd-raw-name.dwl` + `transform-laborstd-combine-export.dwl` pattern already established for Jewelry, extended to a 3-way concat for `company`/`elevator`:
+Thirteen new files — one parse/rename + one combine-export per entity for the six Current/Historical(/Private) entities, mirroring the `ImportSourceData`/`transform-laborstd-raw-name.dwl` + `transform-laborstd-combine-export.dwl` pattern already established for Jewelry (extended to a 3-way concat for `company`/`elevator`), plus one single self-contained transform for `classification` (no historical pair, nothing to combine, so no separate combine-export step — reads raw `.unl` and writes the final CSV in one step):
 
 | Entity | Parse/rename transform | Combine-export transform |
 |---|---|---|
@@ -2365,8 +2366,9 @@ Twelve new files — one parse/rename + one combine-export per entity (six entit
 | `license` | `transform-elevator-license-raw-name.dwl` | `transform-elevator-license-combine-export.dwl` |
 | `payments` | `transform-elevator-payments-raw-name.dwl` | `transform-elevator-payments-combine-export.dwl` |
 | `violation` | `transform-violation-raw-name.dwl` | `transform-violation-combine-export.dwl` |
+| `classification` | `transform-elevator-classification-raw-name.dwl` (self-contained, writes CSV directly) | n/a |
 
-**Naming note**: `license`/`payments`' transforms are prefixed `transform-elevator-*` (not the bare `transform-license-*`/`transform-payments-*` the other four entities use) specifically to avoid collision/confusion with this project's existing `license`-adjacent terminology (`vars.licenseTypeId`, BusinessLicense/RegulatoryAuthorization) and the existing singular `transform-payment.dwl`/`transform-payment-petroleum.dwl` (Jewelry/Petroleum's `Payment__c` create transforms) — these Elevators tables are unrelated objects that happen to share a name. **Not yet confirmed with the user whether this naming convention is preferred** — flag if a different scheme is wanted.
+**Naming note (confirmed 2026-08-24)**: `license`/`payments`/`classification`'s transforms are prefixed `transform-elevator-*` (not the bare `transform-license-*`/`transform-payments-*`/`transform-classification-*` the other three would-otherwise-collide entities suggest) specifically to avoid collision/confusion with this project's existing `license`-adjacent terminology (`vars.licenseTypeId`, BusinessLicense/RegulatoryAuthorization) and the existing singular `transform-payment.dwl`/`transform-payment-petroleum.dwl` (Jewelry/Petroleum's `Payment__c` create transforms) — these Elevators tables are unrelated objects that happen to share a name. User confirmed this naming convention should be kept.
 
 **Each parse/rename transform**:
 - Reads the raw pipe-delimited `.unl` (`quoteChar="\u0000"`, disabling quote interpretation — same fix as the truck imports, section 6).
@@ -2379,7 +2381,6 @@ Twelve new files — one parse/rename + one combine-export per entity (six entit
 **No decimal-artifact stripping applied yet** — unlike the truck imports (`licenseno`/`year<N>` confirmed `.0`-suffixed) or Jewelry/Petroleum's `padZip`/`fixFein`, none of these 15 Elevators tables have been confirmed to hit the Access-exported-numeric-column `.0` artifact on any specific field. Given how many fields here plausibly look Access-numeric (`recnumb`, `invoice_no`, various fee/amount columns), this is flagged as a real risk to watch for once real data is tested — not preemptively coded around, since guessing which fields need it risks corrupting a field that legitimately contains a period (matches this project's established pattern of discovering these issues empirically rather than guessing).
 
 ### Open items
-- `classification` column list — user supplying separately (2 columns, 10 rows, no historical pair).
 - **What "private" means** for the `company`/`elevator` split — not yet needed for the import layer, deferred.
 - **Cross-table relationships/join keys** — explicitly deferred by the user (2026-08-24): `recnumb` appears on `elevator`/`payments`/`comp_lic`/`license`/`violation`, `license` additionally has a distinct `recnum` field, and `co_license_no` appears on both `elevator` and `license` — whether these represent one consistent join key or multiple different relationships (e.g. elevator→owner via `recnumb` vs. elevator/license→installer-company via `co_license_no`) is unresolved. Don't assume a join structure without asking.
 - Salesforce object mapping — not started. Given the source data's breadth (companies, owners, elevators, licenses, violations, payments), this will likely need new/different Salesforce objects beyond the BLA/BusinessLicense/Assessment pattern the other three work units share — nothing assumed yet.
