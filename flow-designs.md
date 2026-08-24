@@ -2380,6 +2380,125 @@ Thirteen new files — one parse/rename + one combine-export per entity for the 
 
 **No decimal-artifact stripping applied yet** — unlike the truck imports (`licenseno`/`year<N>` confirmed `.0`-suffixed) or Jewelry/Petroleum's `padZip`/`fixFein`, none of these 15 Elevators tables have been confirmed to hit the Access-exported-numeric-column `.0` artifact on any specific field. Given how many fields here plausibly look Access-numeric (`recnumb`, `invoice_no`, various fee/amount columns), this is flagged as a real risk to watch for once real data is tested — not preemptively coded around, since guessing which fields need it risks corrupting a field that legitimately contains a period (matches this project's established pattern of discovering these issues empirically rather than guessing).
 
+### `ImportSourceDataElevators` — Studio Flow Structure + Audit Logging (designed 2026-08-24, not yet built in Studio)
+
+**Trigger** — proposed `ElevatorsSourceDataReadyFlag.csv` (adjust if a different name is wanted), same convention as `SourceDataReadyFlag.csv`/`LoadReadyFlagPetroleum.csv`: Directory `C:\data\`, Min Size `1`, polling interval `10` seconds, created only once all 15 raw `.unl` files are in place.
+
+**Two new shared transforms** (reused across every entity/file, not per-entity):
+- **`transform-elevator-column-count-check.dwl`** — runs on the raw parsed payload *before* renaming. Parameterized via `vars.expectedColCount` (set before each call). Returns `{ totalRows, expectedColCount, mismatchCount, mismatches: [{rowIndex, actualCount}] }` — flags any row whose raw field count doesn't match the confirmed schema, since neither a too-short nor too-long row throws on its own (a short row leaves trailing renamed fields `null`; a long row silently drops the extras).
+- **`transform-elevator-drop-blank-rows.dwl`** — runs on the renamed row objects, right after each raw-name transform. A row counts as blank if every field except `SourceFileType` is empty after trim. Returns `{ keptRows, sourceCount, keptCount, droppedCount }`. Confirmed 2026-08-24: blank rows get **dropped**, with the count logged — not silently passed through, and not silently discarded without a trace either.
+
+**Audit log shape** (distinct from the Result & Log Pattern's `logEntries` used everywhere else — this never touches Salesforce, it's purely pre-Access):
+```
+{ entity, file, check, expected, actual, status: "OK"/"Info"/"Error", message }
+```
+Written once at the end to `C:\data\elevator_import_audit_<yyyyMMdd_HHmm>.csv` (`quoteValues=true`, same convention as `delete_log.csv`).
+
+**Checks performed per file**: `ColumnCount` (pre-rename), `RowCount` (source count / blank-dropped count / kept count, post-blank-filter). **Checks performed per entity, after all its files are read**: `SourceFileTypeDistribution` (`company`/`elevator` only — logs the per-`SourceFileType` counts and their sum) and `WrittenRowCount` (all entities — after writing the final CSV, **reads it back** and confirms its row count matches the expected combined total; this is a genuinely independent check, not just re-deriving the same arithmetic the write step already did, since it would catch a bug in the combine-export transform itself, e.g. a wrong variable referenced). Each `File Read` is wrapped in `Try`/`On Error Continue` so a missing source file produces a clear `FileRead` audit entry instead of crashing the whole run partway through.
+
+**Fully worked example — `company` (3-way: Current/Historical/Private)**:
+```
+Flow: ImportSourceDataElevators
+On New or Updated File (C:\data\, ElevatorsSourceDataReadyFlag.csv)
+  → Logger: "ImportSourceDataElevators process starting"
+
+  → Try
+      File Read (Path: C:\data\company.unl)
+      → [explicit CSV metadata on the Transform Message's Input panel: header:false, separator:"|"
+          — same reason as laborstd.txt/his_lab.txt, a .unl extension doesn't auto-detect as CSV]
+      → Transform Message (transform-elevator-column-count-check.dwl, vars.expectedColCount = 14)
+      → Set Variable: colCheckResult = payload
+      → Set Variable: auditEntries = (vars.auditEntries default []) ++ [{
+            entity: "company", file: "company.unl", check: "ColumnCount", expected: 14, actual: null,
+            status: if (vars.colCheckResult.mismatchCount == 0) "OK" else "Error",
+            message: if (vars.colCheckResult.mismatchCount == 0)
+                "All " ++ (vars.colCheckResult.totalRows as String) ++ " rows have 14 columns"
+              else (vars.colCheckResult.mismatchCount as String) ++ " of "
+                ++ (vars.colCheckResult.totalRows as String) ++ " rows have wrong column count"
+        }]
+      → Set Variable: sourceFileType = "Current"
+      → Transform Message (transform-company-raw-name.dwl)
+      → Transform Message (transform-elevator-drop-blank-rows.dwl)
+      → Set Variable: blankCheckResult = payload
+      → Set Variable: auditEntries = (vars.auditEntries default []) ++ [{
+            entity: "company", file: "company.unl", check: "RowCount", expected: null,
+            actual: vars.blankCheckResult.keptCount, status: "Info",
+            message: "Source rows: " ++ (vars.blankCheckResult.sourceCount as String)
+                ++ ", Blank rows dropped: " ++ (vars.blankCheckResult.droppedCount as String)
+                ++ ", Kept: " ++ (vars.blankCheckResult.keptCount as String)
+        }]
+      → Set Variable: currentCompanyRows = #[vars.blankCheckResult.keptRows]
+    On Error Continue
+      → Set Variable: auditEntries = (vars.auditEntries default []) ++ [{
+            entity: "company", file: "company.unl", check: "FileRead", expected: null, actual: null,
+            status: "Error", message: "File read failed: " ++ error.description
+        }]
+      → Set Variable: currentCompanyRows = []
+
+  → Try (same shape as above) — File Read: hi_company.unl, sourceFileType = "Historical" → historicalCompanyRows
+  → Try (same shape as above) — File Read: hi_company_pr.unl, sourceFileType = "Private" → privateCompanyRows
+
+  → Set Variable: auditEntries = (vars.auditEntries default []) ++ [{
+        entity: "company", file: "ALL", check: "SourceFileTypeDistribution",
+        expected: null, actual: null, status: "Info",
+        message: "Current: " ++ (sizeOf(vars.currentCompanyRows) as String)
+            ++ ", Historical: " ++ (sizeOf(vars.historicalCompanyRows) as String)
+            ++ ", Private: " ++ (sizeOf(vars.privateCompanyRows) as String)
+            ++ ", Combined total: " ++ ((sizeOf(vars.currentCompanyRows) + sizeOf(vars.historicalCompanyRows)
+                + sizeOf(vars.privateCompanyRows)) as String)
+    }]
+
+  → Transform Message (transform-company-combine-export.dwl)
+  → File Write (Path: C:\data\company.csv)
+  → File Read (Path: C:\data\company.csv)
+  → Transform Message (parse CSV, header:true — read back what was actually written)
+  → Set Variable: auditEntries = (vars.auditEntries default []) ++ [{
+        entity: "company", file: "company.csv", check: "WrittenRowCount",
+        expected: sizeOf(vars.currentCompanyRows) + sizeOf(vars.historicalCompanyRows) + sizeOf(vars.privateCompanyRows),
+        actual: sizeOf(payload),
+        status: if (sizeOf(payload) == (sizeOf(vars.currentCompanyRows) + sizeOf(vars.historicalCompanyRows)
+            + sizeOf(vars.privateCompanyRows))) "OK" else "Error",
+        message: "Confirms company.csv row count matches the combined source total"
+    }]
+```
+
+**Fully worked example — `comp_lic` (2-way: Current/Historical)** — identical shape, just two `Try` blocks instead of three and no `SourceFileTypeDistribution` check (that's only meaningful for the two 3-way entities):
+```
+→ Try — File Read: comp_lic.unl, vars.expectedColCount = 30, sourceFileType = "Current",
+    transform-comp-lic-raw-name.dwl → currentCompLicRows (same ColumnCount/RowCount/FileRead
+    audit steps as company's Current block above)
+→ Try — File Read: hi_comp_lic.unl, sourceFileType = "Historical" → historicalCompLicRows
+→ Transform Message (transform-comp-lic-combine-export.dwl)
+→ File Write: C:\data\comp_lic.csv
+→ File Read: C:\data\comp_lic.csv → parse → WrittenRowCount check (expected =
+    sizeOf(currentCompLicRows) + sizeOf(historicalCompLicRows))
+```
+
+**Remaining entities — same two patterns, different files/columns/variable names**:
+
+| Entity | Shape | `expectedColCount` | Source files | Row-variable names |
+|---|---|---|---|---|
+| `elevator` | 3-way (same as `company`) | 72 | `elevator.unl` / `his_elev.unl` / `hi_elevator_pr.unl` | `currentElevatorRows` / `historicalElevatorRows` / `privateElevatorRows` |
+| `license` | 2-way (same as `comp_lic`) | 33 | `license.unl` / `hi_license.unl` | `currentLicenseRows` / `historicalLicenseRows` |
+| `payments` | 2-way | 62 | `payments.unl` / `hi_payments.unl` | `currentPaymentsRows` / `historicalPaymentsRows` |
+| `violation` | 2-way | 42 | `violation.unl` / `hist_viol.unl` | `currentViolationRows` / `historicalViolationRows` |
+
+**`classification`** — simplest case, single file, no `Try`/`SourceFileType`/blank-row-drop needed at all (its transform, `transform-elevator-classification-raw-name.dwl`, goes straight from raw `.unl` to final CSV in one step, per its own design above):
+```
+→ Try
+    File Read: classification.unl
+    → Transform Message (transform-elevator-column-count-check.dwl, vars.expectedColCount = 2)
+    → [ColumnCount audit entry]
+    → Transform Message (transform-elevator-classification-raw-name.dwl)
+    → File Write: C:\data\classification.csv
+  On Error Continue → [FileRead audit entry]
+→ File Read: C:\data\classification.csv → parse → WrittenRowCount check (expected = the
+    ColumnCount check's totalRows, since classification.unl has no per-file blank-row-drop step)
+```
+Note: since `transform-elevator-classification-raw-name.dwl` doesn't append `SourceFileType` and writes CSV directly (no separate combine step), there's no blank-row-drop pass documented here yet — worth deciding whether `classification`'s 13 known rows warrant that same defensive check, or whether it's safe to skip given the lookup table's small, well-known size.
+
+**End of flow**: `File Write: C:\data\elevator_import_audit_<yyyyMMdd_HHmm>.csv` (`vars.auditEntries as CSV`, `quoteValues=true`), unconditional (unlike the delete/verify flows' "skip if nothing to report" — every run of this flow produces meaningful counts worth recording, not just errors).
+
 ### Open items
 - **What "private" means** for the `company`/`elevator` split — not yet needed for the import layer, deferred.
 - **Cross-table relationships/join keys** — explicitly deferred by the user (2026-08-24): `recnumb` appears on `elevator`/`payments`/`comp_lic`/`license`/`violation`, `license` additionally has a distinct `recnum` field, and `co_license_no` appears on both `elevator` and `license` — whether these represent one consistent join key or multiple different relationships (e.g. elevator→owner via `recnumb` vs. elevator/license→installer-company via `co_license_no`) is unresolved. Don't assume a join structure without asking.
