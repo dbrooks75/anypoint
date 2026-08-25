@@ -2402,11 +2402,30 @@ Written once at the end to `C:\data\elevator_import_audit_<yyyyMMdd_HHmm>.csv` (
 
 **Column-count check must be wired as a `Set Variable`, not a `Transform Message` — corrected 2026-08-25**: originally documented (and initially built) as a `Transform Message` step calling `transform-elevator-column-count-check.dwl`, immediately followed by `Set Variable: colCheckResult = payload`. **This is wrong and fails in Studio** — a `Transform Message` *replaces* `payload` with its own output; the follow-up `Set Variable` captures that result into `colCheckResult`, but does nothing to restore the original parsed rows. The very next step in the chain (the raw-name transform) then receives the *column-count-check's own result object* as its input instead of the actual file rows, and throws `You called the function 'map' with these arguments: 1: Object (...) ... but it expects Array`. Fixed by making `transform-elevator-column-count-check.dwl`'s content the **Value expression of the `Set Variable: colCheckResult` step directly** (referencing `payload` inline, same as every `logEntries`-append `Set Variable` elsewhere in this project) — a `Set Variable`'s value expression reads `payload` without ever replacing it, so the original parsed rows survive untouched for the raw-name transform right after. The `.dwl` file itself is unchanged and still the source of truth for the check's logic; only *how it gets wired into Studio* changed (paste its content into the `Set Variable`'s expression editor, not add it as a separate Transform Message component).
 
-**Fully worked example — `company` (3-way: Current/Historical/Private)**:
+**One sub-flow per entity, `expectedColCount` derived from a column list — refactored 2026-08-25**: originally each entity's `Try` block(s) set `vars.expectedColCount` to a bare literal (`14`, `72`, `30`, ...). Changed so the column count is never hardcoded anywhere: each entity gets its own sub-flow (e.g. `AddCompanyFiles` — exact names not yet finalized, adjust as built) that, **before its first `Try` block**, defines the full column list as `vars.expectedCols` and derives `vars.expectedColCount = sizeOf(vars.expectedCols)`. Every `Try` block inside that sub-flow then references `vars.expectedColCount`, never a literal number — if the schema ever changes, only the one `expectedCols` list needs updating, not a scattered count. The main flow becomes a simple sequence of `Flow Reference` calls, one per entity, followed by the single end-of-run audit log write (sub-flows called via `Flow Reference` share the caller's `vars` scope, so `auditEntries` keeps accumulating across all seven without any extra wiring):
 ```
 Flow: ImportSourceDataElevator
 On New or Updated File (C:\data\, ElevatorsSourceDataReadyFlag.csv)
   → Logger: "ImportSourceDataElevator process starting"
+  → Flow Reference: AddCompanyFiles
+  → Flow Reference: AddElevatorFiles
+  → Flow Reference: AddCompLicFiles
+  → Flow Reference: AddLicenseFiles
+  → Flow Reference: AddPaymentsFiles
+  → Flow Reference: AddViolationFiles
+  → Flow Reference: AddClassificationFile
+  → Set Variable: logFilename = #["C:\data\elevator_import_audit_" ++ (now() as String {format: 'yyyyMMdd_HHmm'}) ++ ".csv"]
+  → File Write: #[vars.logFilename] (vars.auditEntries as CSV, quoteValues=true)
+```
+
+**Fully worked example — `AddCompanyFiles` sub-flow (`company`, 3-way: Current/Historical/Private)**:
+```
+Sub-flow: AddCompanyFiles
+  → Set Variable: expectedCols = #[[
+        "recnumb", "predacc", "acc", "name", "respparty", "add1", "add2", "city", "state", "zip",
+        "batchid", "phone", "fax", "email"
+    ]]
+  → Set Variable: expectedColCount = #[sizeOf(vars.expectedCols)]
 
   → Try
       File Read (Connector config: FileConfigSourceData; Path: Elevator\company.unl;
@@ -2419,10 +2438,12 @@ On New or Updated File (C:\data\, ElevatorsSourceDataReadyFlag.csv)
           with the check's own result object, corrupting the raw-name transform's input right
           after it)
       → Set Variable: auditEntries = (vars.auditEntries default []) ++ [{
-            entity: "company", file: "company.unl", check: "ColumnCount", expected: 14, actual: null,
+            entity: "company", file: "company.unl", check: "ColumnCount",
+            expected: vars.expectedColCount, actual: null,
             status: if (vars.colCheckResult.mismatchCount == 0) "OK" else "Error",
             message: if (vars.colCheckResult.mismatchCount == 0)
-                "All " ++ (vars.colCheckResult.totalRows as String) ++ " rows have 14 columns"
+                "All " ++ (vars.colCheckResult.totalRows as String) ++ " rows have "
+                    ++ (vars.expectedColCount as String) ++ " columns"
               else (vars.colCheckResult.mismatchCount as String) ++ " of "
                 ++ (vars.colCheckResult.totalRows as String) ++ " rows have wrong column count"
         }]
@@ -2445,8 +2466,10 @@ On New or Updated File (C:\data\, ElevatorsSourceDataReadyFlag.csv)
         }]
       → Set Variable: currentCompanyRows = []
 
-  → Try (same shape as above) — File Read: hi_company.unl, sourceFileType = "Historical" → historicalCompanyRows
-  → Try (same shape as above) — File Read: hi_company_pr.unl, sourceFileType = "Private" → privateCompanyRows
+  → Try (same shape as above, reusing the same vars.expectedColCount) — File Read: hi_company.unl,
+      sourceFileType = "Historical" → historicalCompanyRows
+  → Try (same shape as above, reusing the same vars.expectedColCount) — File Read: hi_company_pr.unl,
+      sourceFileType = "Private" → privateCompanyRows
 
   → Set Variable: auditEntries = (vars.auditEntries default []) ++ [{
         entity: "company", file: "ALL", check: "SourceFileTypeDistribution",
@@ -2472,39 +2495,55 @@ On New or Updated File (C:\data\, ElevatorsSourceDataReadyFlag.csv)
     }]
 ```
 
-**Fully worked example — `comp_lic` (2-way: Current/Historical)** — identical shape, just two `Try` blocks instead of three and no `SourceFileTypeDistribution` check (that's only meaningful for the two 3-way entities):
+**Fully worked example — `AddCompLicFiles` sub-flow (`comp_lic`, 2-way: Current/Historical)** — identical shape, just two `Try` blocks instead of three and no `SourceFileTypeDistribution` check (that's only meaningful for the two 3-way entities):
 ```
-→ Try — File Read: comp_lic.unl, vars.expectedColCount = 30, sourceFileType = "Current",
-    transform-comp-lic-raw-name.dwl → currentCompLicRows (same ColumnCount/RowCount/FileRead
-    audit steps as company's Current block above)
-→ Try — File Read: hi_comp_lic.unl, sourceFileType = "Historical" → historicalCompLicRows
-→ Transform Message (transform-comp-lic-combine-export.dwl)
-→ File Write: C:\data\comp_lic.csv
-→ File Read: C:\data\comp_lic.csv → parse → WrittenRowCount check (expected =
-    sizeOf(currentCompLicRows) + sizeOf(historicalCompLicRows))
+Sub-flow: AddCompLicFiles
+  → Set Variable: expectedCols = #[[
+        "license_category", "license_type", "license_ai", "co_license_no", "expire_date", "recnumb",
+        "name", "add1", "add2", "city", "state", "zip",
+        "date_first_issued", "fee", "invoice_no", "date_paid", "next_page", "warning_date_1",
+        "reason_1", "warning_date_2", "reason_2", "warning_date_3", "reason_3", "suspend_date",
+        "reason_suspend", "phone", "status", "date_entered", "comment", "batchid"
+    ]]
+  → Set Variable: expectedColCount = #[sizeOf(vars.expectedCols)]
+
+  → Try — File Read: comp_lic.unl, sourceFileType = "Current",
+      transform-comp-lic-raw-name.dwl → currentCompLicRows (same ColumnCount/RowCount/FileRead
+      audit steps as company's Current block above, reusing vars.expectedColCount)
+  → Try — File Read: hi_comp_lic.unl, sourceFileType = "Historical" → historicalCompLicRows
+  → Transform Message (transform-comp-lic-combine-export.dwl)
+  → File Write: C:\data\comp_lic.csv
+  → File Read: C:\data\comp_lic.csv → parse → WrittenRowCount check (expected =
+      sizeOf(currentCompLicRows) + sizeOf(historicalCompLicRows))
 ```
 
-**Remaining entities — same two patterns, different files/columns/variable names**:
+**Remaining entities — same two sub-flow shapes, different files/columns/variable names.** Column lists are exactly as given in "Confirmed column lists" above — just wrap each in its own sub-flow's `Set Variable: expectedCols` the same way as `company`/`comp_lic` above, no counts hardcoded anywhere:
 
-| Entity | Shape | `expectedColCount` | Source files | Row-variable names |
+| Entity | Sub-flow name | Shape | Source files | Row-variable names |
 |---|---|---|---|---|
-| `elevator` | 3-way (same as `company`) | 72 | `elevator.unl` / `his_elev.unl` / `hi_elevator_pr.unl` | `currentElevatorRows` / `historicalElevatorRows` / `privateElevatorRows` |
-| `license` | 2-way (same as `comp_lic`) | 33 | `license.unl` / `hi_license.unl` | `currentLicenseRows` / `historicalLicenseRows` |
-| `payments` | 2-way | 62 | `payments.unl` / `hi_payments.unl` | `currentPaymentsRows` / `historicalPaymentsRows` |
-| `violation` | 2-way | 42 | `violation.unl` / `hist_viol.unl` | `currentViolationRows` / `historicalViolationRows` |
+| `elevator` | `AddElevatorFiles` | 3-way (same as `company`) | `elevator.unl` / `his_elev.unl` / `hi_elevator_pr.unl` | `currentElevatorRows` / `historicalElevatorRows` / `privateElevatorRows` |
+| `license` | `AddLicenseFiles` | 2-way (same as `comp_lic`) | `license.unl` / `hi_license.unl` | `currentLicenseRows` / `historicalLicenseRows` |
+| `payments` | `AddPaymentsFiles` | 2-way | `payments.unl` / `hi_payments.unl` | `currentPaymentsRows` / `historicalPaymentsRows` |
+| `violation` | `AddViolationFiles` | 2-way | `violation.unl` / `hist_viol.unl` | `currentViolationRows` / `historicalViolationRows` |
 
-**`classification`** — simplest case, single file, no `Try`/`SourceFileType`/blank-row-drop needed at all (its transform, `transform-elevator-classification-raw-name.dwl`, goes straight from raw `.unl` to final CSV in one step, per its own design above):
+Sub-flow names above are suggestions matching this project's `Add<Entity>*` convention — adjust to whatever's actually built.
+
+**`AddClassificationFile` sub-flow (`classification`)** — simplest case, single file, no `Try`-block repetition/`SourceFileType`/blank-row-drop needed at all (its transform, `transform-elevator-classification-raw-name.dwl`, goes straight from raw `.unl` to final CSV in one step, per its own design above):
 ```
-→ Try
-    File Read: classification.unl
-    → Set Variable: colCheckResult (Value = transform-elevator-column-count-check.dwl script,
-        vars.expectedColCount = 2 — Set Variable, not Transform Message, same reasoning as company above)
-    → [ColumnCount audit entry]
-    → Transform Message (transform-elevator-classification-raw-name.dwl)
-    → File Write: C:\data\classification.csv
-  On Error Continue → [FileRead audit entry]
-→ File Read: C:\data\classification.csv → parse → WrittenRowCount check (expected = the
-    ColumnCount check's totalRows, since classification.unl has no per-file blank-row-drop step)
+Sub-flow: AddClassificationFile
+  → Set Variable: expectedCols = #[["elev_class", "elev_desc"]]
+  → Set Variable: expectedColCount = #[sizeOf(vars.expectedCols)]
+
+  → Try
+      File Read: classification.unl
+      → Set Variable: colCheckResult (Value = transform-elevator-column-count-check.dwl script,
+          reusing vars.expectedColCount — Set Variable, not Transform Message, same reasoning as company above)
+      → [ColumnCount audit entry]
+      → Transform Message (transform-elevator-classification-raw-name.dwl)
+      → File Write: C:\data\classification.csv
+    On Error Continue → [FileRead audit entry]
+  → File Read: C:\data\classification.csv → parse → WrittenRowCount check (expected = the
+      ColumnCount check's totalRows, since classification.unl has no per-file blank-row-drop step)
 ```
 Note: since `transform-elevator-classification-raw-name.dwl` doesn't append `SourceFileType` and writes CSV directly (no separate combine step), there's no blank-row-drop pass documented here yet — worth deciding whether `classification`'s 13 known rows warrant that same defensive check, or whether it's safe to skip given the lookup table's small, well-known size.
 
