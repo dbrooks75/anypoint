@@ -2400,6 +2400,8 @@ Written once at the end to `C:\data\elevator_import_audit_<yyyyMMdd_HHmm>.csv` (
 
 **Checks performed per file**: `ColumnCount` (pre-rename), `RowCount` (source count / blank-dropped count / kept count, post-blank-filter). **Checks performed per entity, after all its files are read**: `SourceFileTypeDistribution` (`company`/`elevator` only — logs the per-`SourceFileType` counts and their sum) and `WrittenRowCount` (all entities — after writing the final CSV, **reads it back** and confirms its row count matches the expected combined total; this is a genuinely independent check, not just re-deriving the same arithmetic the write step already did, since it would catch a bug in the combine-export transform itself, e.g. a wrong variable referenced). Each `File Read` is wrapped in `Try`/`On Error Continue` so a missing source file produces a clear `FileRead` audit entry instead of crashing the whole run partway through.
 
+**Column-count check must be wired as a `Set Variable`, not a `Transform Message` — corrected 2026-08-25**: originally documented (and initially built) as a `Transform Message` step calling `transform-elevator-column-count-check.dwl`, immediately followed by `Set Variable: colCheckResult = payload`. **This is wrong and fails in Studio** — a `Transform Message` *replaces* `payload` with its own output; the follow-up `Set Variable` captures that result into `colCheckResult`, but does nothing to restore the original parsed rows. The very next step in the chain (the raw-name transform) then receives the *column-count-check's own result object* as its input instead of the actual file rows, and throws `You called the function 'map' with these arguments: 1: Object (...) ... but it expects Array`. Fixed by making `transform-elevator-column-count-check.dwl`'s content the **Value expression of the `Set Variable: colCheckResult` step directly** (referencing `payload` inline, same as every `logEntries`-append `Set Variable` elsewhere in this project) — a `Set Variable`'s value expression reads `payload` without ever replacing it, so the original parsed rows survive untouched for the raw-name transform right after. The `.dwl` file itself is unchanged and still the source of truth for the check's logic; only *how it gets wired into Studio* changed (paste its content into the `Set Variable`'s expression editor, not add it as a separate Transform Message component).
+
 **Fully worked example — `company` (3-way: Current/Historical/Private)**:
 ```
 Flow: ImportSourceDataElevator
@@ -2411,8 +2413,11 @@ On New or Updated File (C:\data\, ElevatorsSourceDataReadyFlag.csv)
           MIME Type tab: MIME Type application/csv, Parameters quote=(NUL), separator=|,
           header=false — this is what actually parses the raw .unl into an array; no
           DataWeave input directive needed on any transform downstream, see note above)
-      → Transform Message (transform-elevator-column-count-check.dwl, vars.expectedColCount = 14)
-      → Set Variable: colCheckResult = payload
+      → Set Variable: colCheckResult (Value = full transform-elevator-column-count-check.dwl
+          script, reading payload directly — see "Column-count check must be a Set Variable,
+          not a Transform Message" note above; a Transform Message here would replace payload
+          with the check's own result object, corrupting the raw-name transform's input right
+          after it)
       → Set Variable: auditEntries = (vars.auditEntries default []) ++ [{
             entity: "company", file: "company.unl", check: "ColumnCount", expected: 14, actual: null,
             status: if (vars.colCheckResult.mismatchCount == 0) "OK" else "Error",
@@ -2492,7 +2497,8 @@ On New or Updated File (C:\data\, ElevatorsSourceDataReadyFlag.csv)
 ```
 → Try
     File Read: classification.unl
-    → Transform Message (transform-elevator-column-count-check.dwl, vars.expectedColCount = 2)
+    → Set Variable: colCheckResult (Value = transform-elevator-column-count-check.dwl script,
+        vars.expectedColCount = 2 — Set Variable, not Transform Message, same reasoning as company above)
     → [ColumnCount audit entry]
     → Transform Message (transform-elevator-classification-raw-name.dwl)
     → File Write: C:\data\classification.csv
