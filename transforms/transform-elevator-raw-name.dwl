@@ -1,5 +1,4 @@
 %dw 2.0
-input payload application/csv separator="|", quoteChar="\u0000"
 output application/java
 
 // Reused for all three of Elevators' elevator source files: elevator.unl (Current),
@@ -8,6 +7,9 @@ output application/java
 // "Private" before each call, same pattern as transform-laborstd-raw-name.dwl.
 // Column 50 ("oos_date") — confirmed 2026-08-24 this is a single column despite its raw source
 // label reading like two words ("oos_date date"); persisted here under the simplified name.
+// No input directive here (corrected 2026-08-25) -- the File Read component's own MIME
+// Type tab (application/csv, quote=NUL, separator=|, header=false) parses the raw .unl
+// before payload reaches this transform, matching ImportSourceDataPetroleum's pattern.
 var allCols = [
     "serial_no", "recnumb", "co_license_no", "device_active", "building", "name",
     "add1", "add2", "city", "last_insp_date", "insp_date_due", "next_insp_date",

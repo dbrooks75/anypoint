@@ -2384,8 +2384,12 @@ Thirteen new files — one parse/rename + one combine-export per entity for the 
 
 **Trigger** — proposed `ElevatorsSourceDataReadyFlag.csv` (adjust if a different name is wanted), same convention as `SourceDataReadyFlag.csv`/`LoadReadyFlagPetroleum.csv`: Directory `C:\data\`, Min Size `1`, polling interval `10` seconds, created only once all 15 raw `.unl` files are in place.
 
+**File Read parsing — corrected 2026-08-25**: originally each raw-name transform (and `transform-elevator-column-count-check.dwl`) declared its own `input payload application/csv separator="|", quoteChar="\u0000"` directive, matching the truck-import pattern. **This failed in Studio** — the very first real run threw `You called the function 'map' with these arguments: 1: Binary (...) ... But it expects arguments of these types: 1: Array`, meaning `payload` was still raw `Binary` by the time the script tried to `map` over it; the inline `input` directive did not coerce it. Fixed by moving parsing to the **File Read component itself**, matching `ImportSourceDataPetroleum`'s already-proven pattern: on the File Read operation's **MIME Type tab**, set MIME Type `application/csv` with parameters `quote` = (NUL character), `separator` = `|`, `header` = `false`. With parsing happening at the File Read step, `payload` is already a parsed array by the time any Transform Message runs — so **no transform in this flow needs its own `input` directive at all**. All 8 affected `.dwl` files (`transform-company-raw-name.dwl`, `transform-elevator-raw-name.dwl`, `transform-comp-lic-raw-name.dwl`, `transform-elevator-license-raw-name.dwl`, `transform-elevator-payments-raw-name.dwl`, `transform-violation-raw-name.dwl`, `transform-elevator-classification-raw-name.dwl`, `transform-elevator-column-count-check.dwl`) had this directive removed.
+
+**File paths — corrected 2026-08-25**: the raw `.unl` files live under an `Elevator\` subfolder relative to the `FileConfigSourceData` connector's configured working directory (confirmed via the actual File Read component: Path = `Elevator\company.unl`), **not** directly in `C:\data\` as originally documented below — the Flow Structure examples below still show `C:\data\...` paths for the output CSV writes/reads and the audit log, since those haven't been confirmed either way yet; only the `.unl` **source read** paths are confirmed to need the `Elevator\` prefix. Flag/fix if the CSV outputs also belong under that subfolder.
+
 **Two new shared transforms** (reused across every entity/file, not per-entity):
-- **`transform-elevator-column-count-check.dwl`** — called directly on the raw `File Read` output, *before* the entity's raw-name transform runs. Has its **own** `input payload application/csv separator="|", quoteChar="\u0000"` directive (matching every raw-name transform's parse settings) — corrected 2026-08-25, originally missing, which would have failed immediately since a `.unl` extension doesn't auto-detect as CSV and nothing upstream had parsed the payload yet. Parameterized via `vars.expectedColCount` (set before each call). Returns `{ totalRows, expectedColCount, mismatchCount, mismatches: [{rowIndex, actualCount}] }` — flags any row whose raw field count doesn't match the confirmed schema, since neither a too-short nor too-long row throws on its own (a short row leaves trailing renamed fields `null`; a long row silently drops the extras).
+- **`transform-elevator-column-count-check.dwl`** — called directly on the (already File-Read-parsed) payload, *before* the entity's raw-name transform runs. Parameterized via `vars.expectedColCount` (set before each call). Returns `{ totalRows, expectedColCount, mismatchCount, mismatches: [{rowIndex, actualCount}] }` — flags any row whose raw field count doesn't match the confirmed schema, since neither a too-short nor too-long row throws on its own (a short row leaves trailing renamed fields `null`; a long row silently drops the extras).
 - **`transform-elevator-drop-blank-rows.dwl`** — runs on the renamed row objects, right after each raw-name transform. A row counts as blank if every field except `SourceFileType` is empty after trim. Returns `{ keptRows, sourceCount, keptCount, droppedCount }`. Confirmed 2026-08-24: blank rows get **dropped**, with the count logged — not silently passed through, and not silently discarded without a trace either.
 
 **Audit log shape** (distinct from the Result & Log Pattern's `logEntries` used everywhere else — this never touches Salesforce, it's purely pre-Access):
@@ -2403,11 +2407,11 @@ On New or Updated File (C:\data\, ElevatorsSourceDataReadyFlag.csv)
   → Logger: "ImportSourceDataElevator process starting"
 
   → Try
-      File Read (Path: C:\data\company.unl)
-      → Transform Message (transform-elevator-column-count-check.dwl, vars.expectedColCount = 14
-          — parses the raw payload itself via its own input directive, no separate Studio-level
-          Input-panel metadata configuration needed, unlike the older laborstd.txt/his_lab.txt
-          pattern (section 2) which predates transforms declaring their own input directive)
+      File Read (Connector config: FileConfigSourceData; Path: Elevator\company.unl;
+          MIME Type tab: MIME Type application/csv, Parameters quote=(NUL), separator=|,
+          header=false — this is what actually parses the raw .unl into an array; no
+          DataWeave input directive needed on any transform downstream, see note above)
+      → Transform Message (transform-elevator-column-count-check.dwl, vars.expectedColCount = 14)
       → Set Variable: colCheckResult = payload
       → Set Variable: auditEntries = (vars.auditEntries default []) ++ [{
             entity: "company", file: "company.unl", check: "ColumnCount", expected: 14, actual: null,
@@ -2501,6 +2505,7 @@ Note: since `transform-elevator-classification-raw-name.dwl` doesn't append `Sou
 **End of flow**: `File Write: C:\data\elevator_import_audit_<yyyyMMdd_HHmm>.csv` (`vars.auditEntries as CSV`, `quoteValues=true`), unconditional (unlike the delete/verify flows' "skip if nothing to report" — every run of this flow produces meaningful counts worth recording, not just errors).
 
 ### Open items
+- **Whether output CSV writes/reads and the audit log also belong under the `Elevator\` subfolder** — only the `.unl` source reads are confirmed to need that path prefix (`FileConfigSourceData` connector, Path = `Elevator\company.unl`); the Flow Structure examples above still show bare `C:\data\...` for `company.csv`/`comp_lic.csv`/etc. and the audit log, unconfirmed either way.
 - **What "private" means** for the `company`/`elevator` split — not yet needed for the import layer, deferred.
 - **Cross-table relationships/join keys** — explicitly deferred by the user (2026-08-24): `recnumb` appears on `elevator`/`payments`/`comp_lic`/`license`/`violation`, `license` additionally has a distinct `recnum` field, and `co_license_no` appears on both `elevator` and `license` — whether these represent one consistent join key or multiple different relationships (e.g. elevator→owner via `recnumb` vs. elevator/license→installer-company via `co_license_no`) is unresolved. Don't assume a join structure without asking.
 - Salesforce object mapping — not started. Given the source data's breadth (companies, owners, elevators, licenses, violations, payments), this will likely need new/different Salesforce objects beyond the BLA/BusinessLicense/Assessment pattern the other three work units share — nothing assumed yet.

@@ -1,5 +1,4 @@
 %dw 2.0
-input payload application/csv separator="|", quoteChar="\u0000"
 output application/csv header=true, quoteValues=true
 
 // Elevators' classification lookup table — elev_class (single-letter code) / elev_desc
@@ -10,6 +9,9 @@ output application/csv header=true, quoteValues=true
 // not hardcoded here, this transform just parses whatever's actually in the file: A=WIND
 // TURBINE, D=DUMBWAITER, E=ESCALATOR, F=FREIGHT, H=PERSONAL HOIST, I=IPL, L=LULA, M=MATERIAL
 // LIFT, P=PASSENGER, S=STAIRLIFT, T=PRIVATE ELEVETTE, V=VPL, W=MVWK.
+// No input directive here (corrected 2026-08-25) -- the File Read component's own MIME
+// Type tab (application/csv, quote=NUL, separator=|, header=false) parses the raw .unl
+// before payload reaches this transform, matching ImportSourceDataPetroleum's pattern.
 var allCols = ["elev_class", "elev_desc"]
 ---
 payload map (row) -> do {

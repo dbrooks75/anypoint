@@ -1,5 +1,4 @@
 %dw 2.0
-input payload application/csv separator="|", quoteChar="\u0000"
 output application/java
 
 // Elevators' own "license" table (individual mechanic licenses) — reused for both source
@@ -10,6 +9,9 @@ output application/java
 // Jewelry/Petroleum/BiWeeklyPayroll side — this is an unrelated Elevators-specific object.
 // Note: this table has BOTH "recnum" and "recnumb" as separate columns (confirmed 2026-08-24)
 // — unlike comp_lic, which only has recnumb.
+// No input directive here (corrected 2026-08-25) -- the File Read component's own MIME
+// Type tab (application/csv, quote=NUL, separator=|, header=false) parses the raw .unl
+// before payload reaches this transform, matching ImportSourceDataPetroleum's pattern.
 var allCols = [
     "license_category", "license_type", "license_ai", "license_no", "lic_name", "lic_add1",
     "lic_add2", "lic_city", "lic_state", "lic_zip", "expire_date", "ssno",

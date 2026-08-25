@@ -1,11 +1,13 @@
 %dw 2.0
-input payload application/csv separator="|", quoteChar="\u0000"
 output application/java
 
 // Reused for both of Elevators' comp_lic source files: comp_lic.unl (Current),
 // hi_comp_lic.unl (Historical). vars.sourceFileType must be set to "Current"/"Historical"
 // before each call, same pattern as transform-laborstd-raw-name.dwl. Note: comp_lic has no
 // "recnum" field (unlike license, which has both recnum and recnumb) — confirmed 2026-08-24.
+// No input directive here (corrected 2026-08-25) -- the File Read component's own MIME
+// Type tab (application/csv, quote=NUL, separator=|, header=false) parses the raw .unl
+// before payload reaches this transform, matching ImportSourceDataPetroleum's pattern.
 var allCols = [
     "license_category", "license_type", "license_ai", "co_license_no", "expire_date", "recnumb",
     "name", "add1", "add2", "city", "state", "zip",

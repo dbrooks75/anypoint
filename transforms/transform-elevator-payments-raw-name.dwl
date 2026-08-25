@@ -1,5 +1,4 @@
 %dw 2.0
-input payload application/csv separator="|", quoteChar="\u0000"
 output application/java
 
 // Elevators' own "payments" table (invoices + payments received against them) — reused for
@@ -9,6 +8,9 @@ output application/java
 // confusion with this project's existing singular transform-payment.dwl/-petroleum.dwl
 // (Jewelry/Petroleum's Payment__c create transforms) — this is an unrelated Elevators-specific
 // raw source table, plural naming intentional (matches the actual source table name).
+// No input directive here (corrected 2026-08-25) -- the File Read component's own MIME
+// Type tab (application/csv, quote=NUL, separator=|, header=false) parses the raw .unl
+// before payload reaches this transform, matching ImportSourceDataPetroleum's pattern.
 var allCols = [
     "recnumb", "predacc", "acc", "bill_or_pay", "hold_certif", "invoice_no",
     "invoice_date", "location", "insp_date", "amt_billed", "prev_billed", "not_billed",

@@ -1,11 +1,13 @@
 %dw 2.0
-input payload application/csv separator="|", quoteChar="\u0000"
 output application/java
 
 // Reused for all three of Elevators' company source files: company.unl (Current),
 // hi_company.unl (Historical), hi_company_pr.unl (Private) — confirmed 2026-08-24 all three
 // share this same 14-column layout. vars.sourceFileType must be set to "Current"/"Historical"/
 // "Private" before each call, same pattern as transform-laborstd-raw-name.dwl.
+// No input directive here (corrected 2026-08-25) -- the File Read component's own MIME
+// Type tab (application/csv, quote=NUL, separator=|, header=false) parses the raw .unl
+// before payload reaches this transform, matching ImportSourceDataPetroleum's pattern.
 var allCols = [
     "recnumb", "predacc", "acc", "name", "respparty", "add1", "add2", "city", "state", "zip",
     "batchid", "phone", "fax", "email"

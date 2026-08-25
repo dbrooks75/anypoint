@@ -1,10 +1,12 @@
 %dw 2.0
-input payload application/csv separator="|", quoteChar="\u0000"
 output application/java
 
 // Reused for both of Elevators' violation source files: violation.unl (Current),
 // hist_viol.unl (Historical). vars.sourceFileType must be set to "Current"/"Historical"
 // before each call, same pattern as transform-laborstd-raw-name.dwl.
+// No input directive here (corrected 2026-08-25) -- the File Read component's own MIME
+// Type tab (application/csv, quote=NUL, separator=|, header=false) parses the raw .unl
+// before payload reaches this transform, matching ImportSourceDataPetroleum's pattern.
 var allCols = [
     "recnumb", "unit_no", "batchid", "owc_ltr1_date", "owc_ltr2_date", "owc_ltr3_date",
     "shutdown_ltr_date", "first_ltr_date", "reas_time_no", "first_15day_flg", "viol_abtmnt_date", "full_compl_date",
