@@ -2362,7 +2362,7 @@ Thirteen new files — one parse/rename + one combine-export per entity for the 
 |---|---|---|
 | `company` | `transform-company-raw-name.dwl` | `transform-company-combine-export.dwl` |
 | `elevator` | `transform-elevator-raw-name.dwl` | `transform-elevator-combine-export.dwl` |
-| `comp_lic` | `transform-comp-lic-raw-name.dwl` | `transform-comp-lic-combine-export.dwl` |
+| `comp_lic` | `transform-comp-lic-raw-name.dwl` (Current only — see `hi_comp_lic.unl` exception below) + `transform-comp-lic-historical-raw-name.dwl` (Historical only) | `transform-comp-lic-combine-export.dwl` |
 | `license` | `transform-elevator-license-raw-name.dwl` | `transform-elevator-license-combine-export.dwl` |
 | `payments` | `transform-elevator-payments-raw-name.dwl` | `transform-elevator-payments-combine-export.dwl` |
 | `violation` | `transform-violation-raw-name.dwl` | `transform-violation-combine-export.dwl` |
@@ -2381,6 +2381,8 @@ Thirteen new files — one parse/rename + one combine-export per entity for the 
 **`hi_elevator_pr.unl` schema exception, confirmed 2026-08-25, fixed 2026-08-26**: unlike `company`'s Historical/Private pair (which share their Current file's exact layout), `elevator`'s Private source file has **70 columns, not 72** — missing `device_active` (originally column 4) and `insp_date_due` (originally column 11) that `elevator.unl`/`his_elev.unl` both have. Gets its own dedicated transform, `transform-elevator-pr-raw-name.dwl` (not a shared `transform-elevator-raw-name.dwl` call), consistent with this project's "one `.dwl` file per distinct schema" convention.
 
 An initial version appended `device_active`/`insp_date_due` as extra keys at the *end* of the row object (mirroring how `SourceFileType` is appended) — this seemed reasonable on the assumption that DataWeave's `application/csv` writer aligns output columns by key **name** across rows, regardless of each row's key insertion order. **That assumption was wrong**: once combined with Current/Historical rows in `transform-elevator-combine-export.dwl`, Private rows' values came out shifted/misaligned in the written CSV. The writer is evidently sensitive to per-row key **order**, not just the key set. Fixed by rewriting `transform-elevator-pr-raw-name.dwl` to build each row object field-by-field, placing `device_active`/`insp_date_due` as `null` at their *original* positions (4 and 11) so every row — Current, Historical, and Private alike — has an identical key order. **General lesson**: when rows with different native schemas are combined into one CSV output in this project, matching key *order* matters, not just key *names* — don't assume the writer will reconcile differing orders.
+
+**`hi_comp_lic.unl` schema exception, confirmed 2026-08-26 — same class of bug**: `comp_lic`'s Historical source file has **29 columns, not 30** — missing `license_ai` (originally column 3). Previously `transform-comp-lic-raw-name.dwl` was shared by both `comp_lic.unl` (Current) and `hi_comp_lic.unl` (Historical); it's now Current-only, and Historical gets its own dedicated `transform-comp-lic-historical-raw-name.dwl`, built field-by-field with `license_ai: null` at its original position (3) — same fix shape as `transform-elevator-pr-raw-name.dwl` above, applying the same corrected key-order lesson. Worth checking the remaining Historical files (`hi_license.unl`, `hi_payments.unl`, `hist_viol.unl`) for the same kind of column-count mismatch before assuming they match their Current counterpart's layout.
 
 **No decimal-artifact stripping applied yet** — unlike the truck imports (`licenseno`/`year<N>` confirmed `.0`-suffixed) or Jewelry/Petroleum's `padZip`/`fixFein`, none of these 15 Elevators tables have been confirmed to hit the Access-exported-numeric-column `.0` artifact on any specific field. Given how many fields here plausibly look Access-numeric (`recnumb`, `invoice_no`, various fee/amount columns), this is flagged as a real risk to watch for once real data is tested — not preemptively coded around, since guessing which fields need it risks corrupting a field that legitimately contains a period (matches this project's established pattern of discovering these issues empirically rather than guessing).
 
@@ -2514,12 +2516,15 @@ Sub-flow: AddCompLicFiles
   → Try — File Read: comp_lic.unl, sourceFileType = "Current",
       transform-comp-lic-raw-name.dwl → currentCompLicRows (same ColumnCount/RowCount/FileRead
       audit steps as company's Current block above, reusing vars.expectedColCount)
-  → Try — File Read: hi_comp_lic.unl, sourceFileType = "Historical" → historicalCompLicRows
+  → Try — File Read: hi_comp_lic.unl, sourceFileType = "Historical",
+      transform-comp-lic-historical-raw-name.dwl → historicalCompLicRows
   → Transform Message (transform-comp-lic-combine-export.dwl)
   → File Write: C:\data\comp_lic.csv
   → File Read: C:\data\comp_lic.csv → parse → WrittenRowCount check (expected =
       sizeOf(currentCompLicRows) + sizeOf(historicalCompLicRows))
 ```
+
+**`hi_comp_lic.unl` (Historical) is the one exception to "same transform, different `sourceFileType`" here too**: its `Try` block calls `transform-comp-lic-historical-raw-name.dwl`, not `transform-comp-lic-raw-name.dwl`, and its column-count check needs its own 29-column `expectedCols`/`expectedColCount` (no `license_ai`) rather than reusing the Current block's 30-column one — see the `hi_comp_lic.unl` schema exception note above.
 
 **Remaining entities — same two sub-flow shapes, different files/columns/variable names.** Column lists are exactly as given in "Confirmed column lists" above — just wrap each in its own sub-flow's `Set Variable: expectedCols` the same way as `company`/`comp_lic` above, no counts hardcoded anywhere:
 

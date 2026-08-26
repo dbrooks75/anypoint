@@ -1,10 +1,10 @@
 %dw 2.0
 output application/java
 
-// Reused for both of Elevators' comp_lic source files: comp_lic.unl (Current),
-// hi_comp_lic.unl (Historical). vars.sourceFileType must be set to "Current"/"Historical"
-// before each call, same pattern as transform-laborstd-raw-name.dwl. Note: comp_lic has no
-// "recnum" field (unlike license, which has both recnum and recnumb) — confirmed 2026-08-24.
+// Used only for comp_lic.unl (Current) — confirmed 2026-08-26 hi_comp_lic.unl (Historical) has
+// a different 29-column layout (missing "license_ai"), so it now has its own dedicated
+// transform, transform-comp-lic-historical-raw-name.dwl. Note: comp_lic has no "recnum" field
+// (unlike license, which has both recnum and recnumb) — confirmed 2026-08-24.
 // No input directive here (corrected 2026-08-25) -- the File Read component's own MIME
 // Type tab (application/csv, quote=NUL, separator=|, header=false) parses the raw .unl
 // before payload reaches this transform, matching ImportSourceDataPetroleum's pattern.
