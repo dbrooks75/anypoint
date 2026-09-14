@@ -2222,14 +2222,16 @@ Placed immediately after Business License creation in both units — before Asse
 
 ## 13. `JewelryUpdates` — Post-Load Maintenance Flow (new, 2026-08-24)
 
-**Purpose**: with Jewelry data live in production, delete-and-reload is no longer an acceptable way to fix/backfill already-loaded accounts (unlike earlier in the project, where re-running the full load was the standard fix for any import change). `JewelryUpdates` is a new, separate flow for applying targeted updates to specific already-loaded accounts, designed to support multiple different update types as new needs come up — not just the one (`AddPaymentNotes`) it launches with.
+**Purpose**: with Jewelry data live in production, delete-and-reload is no longer an acceptable way to fix/backfill already-loaded accounts (unlike earlier in the project, where re-running the full load was the standard fix for any import change). `JewelryUpdates` is a new, separate flow for applying targeted updates to specific already-loaded accounts, designed to support multiple different update types as new needs come up — not just the one (`JewelryUpdatesPaymentNotes`) it launches with.
 
 **Scope mechanism**: unlike the delete/verify flows (sections 1/12-adjacent, jobno-list-in-a-CSV pattern), `JewelryUpdates` reuses the **same `LaborStd.csv`/`LaborAR.csv` file shape** the main load flow already reads — but for a run of this flow, those files are expected to contain **only the rows for the accounts being updated**, pre-scoped externally (e.g. via the same `IsExported`-flag Access mechanism used to scope small test batches, see section 0's `ExportCandidates` note). No jobno filtering happens inside this flow itself.
 
-**Update-type selection**: runtime, not build-time — a separate trigger file, `JewelryUpdatesTrigger.csv`, carries an `updateType` value (single row, one column) that a `Choice` reads to decide which sub-flow to call, per `LaborStd` row. Adding a new update type later means adding one more `When` branch plus its own sub-flow — the per-row `blaId`/`matchingArRows` setup above it is shared by all update types, not duplicated per type.
+**Update-type selection**: runtime, not build-time, and dispatched **by name, not by `Choice`** — a separate trigger file, `JewelryUpdatesTrigger.csv`, carries an `updateType` value (single row, one column) that **is the literal name of the sub-flow to call** (e.g. `JewelryUpdatesPaymentNotes`), read once right after `laborArRows` is set. A dynamic `Flow Reference` (`name="#[vars.updateType]"`) invokes it directly — no `Choice`/`When` mapping to keep in sync. Adding a new update type later means adding a new sub-flow named to match whatever value ops will put in the trigger file; nothing in `JewelryUpdates` itself needs to change. Naming convention: prefix every update-type sub-flow `JewelryUpdates<Name>` so the trigger file's value is self-documenting.
+
+**Unknown/misnamed `updateType` risk**: because the flow name is only known at runtime, Mule can't validate it at deploy time — if `vars.updateType` doesn't match any real flow name, the dynamic `Flow Reference` throws at runtime instead of falling through to an `Otherwise` branch. Wrap it in a `Try`/`On Error Continue` (same convention already used elsewhere in this project for genuine pre-Salesforce failures) and log the caught error as `"Skipped - Unknown updateType"` rather than letting the whole run fail. Unlike the per-row `blaId`/`matchingArRows` lookup (which now lives inside each update-type sub-flow's own `For Each` over `vars.laborStdRows` — see `JewelryUpdatesPaymentNotes` below), this is the one piece of dispatch logic that stays in the main flow.
 
 ### Trigger — `JewelryUpdatesTrigger.csv`
-Same `On New or Updated File` convention as the rest of this project: Directory `C:\data\`, File Name Pattern `JewelryUpdatesTrigger.csv`, Min Size `1`, polling interval `10` seconds. Content matters here (unlike `LoadReadyFlag.csv`'s sentinel-only role) — one row, one column, `updateType` (e.g. `AddPaymentNotes`).
+Same `On New or Updated File` convention as the rest of this project: Directory `C:\data\`, File Name Pattern `JewelryUpdatesTrigger.csv`, Min Size `1`, polling interval `10` seconds. Content matters here (unlike `LoadReadyFlag.csv`'s sentinel-only role) — one row, one column, `updateType`, whose value must be the **exact name of the sub-flow to invoke** (e.g. `JewelryUpdatesPaymentNotes`).
 
 ### Flow Structure (`JewelryUpdates`)
 ```
@@ -2243,40 +2245,24 @@ On New or Updated File (C:\data\, JewelryUpdatesTrigger.csv)
   → File Read: C:\data\LaborAR.csv
   → Transform Message (transform-ar-filter-and-name.dwl — reused as-is)
   → Set Variable: laborArRows = payload
-  → For Each (Collection: #[vars.laborStdRows])
-      → Set Variable: row = payload
-      → Set Variable: matchingArRows = #[vars.laborArRows filter (r) -> r.jobno == vars.row.jobno]
-      → Set Variable: jobno = #[(vars.row.jobno default "") replace "'" with "\\'"]
-      → Salesforce Query: SELECT Id, AccountId, Business_License_Application__c FROM BusinessLicense
-          WHERE Name = ':jobno' (Parameters: #[{jobno: vars.jobno}])
-      → Choice
-          When #[sizeOf(payload default []) > 0]:
-              → Set Variable: accountId = #[payload[0].AccountId]
-              → Set Variable: blaId = #[payload[0].Business_License_Application__c]
-              → Choice
-                  When #[vars.updateType == "AddPaymentNotes"]:
-                      → Flow Reference: AddPaymentNotes
-                  Otherwise:
-                      → Set Variable: logEntries = (vars.logEntries default []) ++ [{
-                            jobno: vars.jobno, object: "JewelryUpdates", status: "Skipped - Unknown updateType",
-                            salesforce_id: null, error_code: null,
-                            error_message: "updateType: " ++ (vars.updateType default "")
-                        }]
-          Otherwise:
-              → Set Variable: logEntries = (vars.logEntries default []) ++ [{
-                    jobno: vars.jobno, object: "BusinessLicense", status: "Not Found",
-                    salesforce_id: null, error_code: null,
-                    error_message: "No BusinessLicense found with this Name"
-                }]
+  → Try
+      → Flow Reference: #[vars.updateType]   (dynamic — Name field set to this expression, not a literal)
+     On Error Continue (Any):
+      → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+            jobno: null, object: "JewelryUpdates", status: "Skipped - Unknown updateType",
+            salesforce_id: null, error_code: null,
+            error_message: "updateType: " ++ (vars.updateType default "") ++ " - " ++ (error.description default "")
+        }]
   → Choice
       When #[sizeOf(vars.logEntries default []) > 0]:
           → Set Variable: logFilename = #["C:\data\jewelry_updates_log_" ++ (now() as String {format: 'yyyyMMdd_HHmm'}) ++ ".csv"]
           → File Write: #[vars.logFilename] (same quoteValues=true multi-line-script pattern as delete_log.csv)
       Otherwise: (skip — nothing to report)
 ```
+The per-row `blaId`/`accountId`/`matchingArRows` lookup that used to sit here, above the update-type dispatch, has moved **into** `JewelryUpdatesPaymentNotes` (and into any future update-type sub-flow) — see below. The "unknown updateType" case is now a single run-level log entry (`jobno: null`) rather than one per `LaborStd` row, caught by the `Try`/`On Error Continue` around the dynamic `Flow Reference` rather than a `Choice` `Otherwise`.
 
-### `AddPaymentNotes` sub-flow
-Reads `vars.jobno`/`vars.blaId`/`vars.matchingArRows` — already scoped per row by the main flow above, no input params needed. Queries `Payment__c` directly on `BusinessLicenseApplication__c = :blaId` (no `Invoice__c` hop — `Payment__c.BusinessLicenseApplication__c` is already set directly at Create time, see `transform-payment.dwl`), matches each result against `vars.matchingArRows` via the same `pymt_type`/reference-number discriminator logic as the load flow, and updates `Payment__c.Notes__c` on an exact single match.
+### `JewelryUpdatesPaymentNotes` sub-flow
+Reads `vars.laborStdRows`/`vars.laborArRows` (set by the main flow before dispatch) and owns its own `For Each` over `vars.laborStdRows` — the per-row `jobno` → `BusinessLicense` → `blaId`/`accountId` lookup and `matchingArRows` scoping now live here, not in the main flow. Queries `Payment__c` directly on `BusinessLicenseApplication__c = :blaId` (no `Invoice__c` hop — `Payment__c.BusinessLicenseApplication__c` is already set directly at Create time, see `transform-payment.dwl`), matches each result against `vars.matchingArRows` via the same `pymt_type`/reference-number discriminator logic as the load flow, and updates `Payment__c.Notes__c` on an exact single match.
 
 **Note content, confirmed 2026-08-24** — five `LaborAR.csv` fields: `deposit_voucher`, `deposit_date`, `budget_acc1`, `budget_acc2`, `remarks`.
 
@@ -2285,24 +2271,40 @@ New transforms:
 - **`transform-payment-note-update.dwl`** — builds `{ Id: vars.payment.Id, Notes__c: <five fields, labeled and semicolon-joined> }` for the Update.
 
 ```
-Salesforce Query: SELECT Id, Payment_Method__c, ReferenceNumber__c, PaymentDate__c
-    FROM Payment__c WHERE BusinessLicenseApplication__c = ':blaId'
-    (Parameters: #[{blaId: vars.blaId}])
-→ For Each (Collection: #[payload])
-    → Set Variable: payment = payload
-    → Transform Message (transform-payment-note-match.dwl)
-    → Set Variable: matchResult = payload
+For Each (Collection: #[vars.laborStdRows])
+    → Set Variable: row = payload
+    → Set Variable: matchingArRows = #[vars.laborArRows filter (r) -> r.jobno == vars.row.jobno]
+    → Set Variable: jobno = #[(vars.row.jobno default "") replace "'" with "\\'"]
+    → Salesforce Query: SELECT Id, AccountId, Business_License_Application__c FROM BusinessLicense
+        WHERE Name = ':jobno' (Parameters: #[{jobno: vars.jobno}])
     → Choice
-        When #[vars.matchResult.matchedRow != null]:
-            → Set Variable: matchedArRow = #[vars.matchResult.matchedRow]
-            → Transform Message (transform-payment-note-update.dwl)
-            → Salesforce Update Payment__c (Records: #[[payload]])
-            → [Result & Log Pattern → logEntries, object: "Payment__c (Notes)"]
+        When #[sizeOf(payload default []) > 0]:
+            → Set Variable: accountId = #[payload[0].AccountId]
+            → Set Variable: blaId = #[payload[0].Business_License_Application__c]
+            → Salesforce Query: SELECT Id, Payment_Method__c, ReferenceNumber__c, PaymentDate__c
+                FROM Payment__c WHERE BusinessLicenseApplication__c = ':blaId'
+                (Parameters: #[{blaId: vars.blaId}])
+            → For Each (Collection: #[payload])
+                → Set Variable: payment = payload
+                → Transform Message (transform-payment-note-match.dwl)
+                → Set Variable: matchResult = payload
+                → Choice
+                    When #[vars.matchResult.matchedRow != null]:
+                        → Set Variable: matchedArRow = #[vars.matchResult.matchedRow]
+                        → Transform Message (transform-payment-note-update.dwl)
+                        → Salesforce Update Payment__c (Records: #[[payload]])
+                        → [Result & Log Pattern → logEntries, object: "Payment__c (Notes)"]
+                    Otherwise:
+                        → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+                              jobno: vars.jobno, object: "Payment__c (Notes)", status: "Skipped - No Match",
+                              salesforce_id: vars.payment.Id, error_code: null,
+                              error_message: "AR row match count: " ++ (vars.matchResult.matchCount as String)
+                          }]
         Otherwise:
             → Set Variable: logEntries = (vars.logEntries default []) ++ [{
-                  jobno: vars.jobno, object: "Payment__c (Notes)", status: "Skipped - No Match",
-                  salesforce_id: vars.payment.Id, error_code: null,
-                  error_message: "AR row match count: " ++ (vars.matchResult.matchCount as String)
+                  jobno: vars.jobno, object: "BusinessLicense", status: "Not Found",
+                  salesforce_id: null, error_code: null,
+                  error_message: "No BusinessLicense found with this Name"
               }]
 ```
 
