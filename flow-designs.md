@@ -2566,11 +2566,106 @@ Note: since `transform-elevator-classification-raw-name.dwl` doesn't append `Sou
 
 **End of flow**: `File Write: C:\data\elevator_import_audit_<yyyyMMdd_HHmm>.csv` (`vars.auditEntries as CSV`, `quoteValues=true`), unconditional (unlike the delete/verify flows' "skip if nothing to report" — every run of this flow produces meaningful counts worth recording, not just errors).
 
+### Salesforce Object Mapping — Account (started 2026-10-06)
+
+Scope reopened by the user, who is now building the Elevators load flow object by object, starting with Account. Source table is **`comp_lic`**, not `company` — a deliberate choice: `comp_lic` is the installer/maintenance companies registered with DLT (the license-holding entities), parallel to how Account is the license-holder in Jewelry/Petroleum/BiWeeklyPayroll, not the elevator owner. `company` (the building/elevator owner table) is not used for Account. Worth confirming this reading is intended before BLA is designed, since `company` may turn out to be a different object entirely (e.g. a related/owner record) rather than unused.
+
+**Grain**: one Account per `comp_lic` row — same "one row, one Account" pattern as every other work unit. `comp_lic`'s `SourceFileType` (`Current`/`Historical`) carries onto the row same as elsewhere, but nothing downstream uses it yet (no Account Status or status-derivation rule defined for Elevators so far).
+
+**Field Mapping** (`transform-account-elevators-comp-lic.dwl` — renamed from `transform-account-elevators.dwl` 2026-10-14 — keeps the `elevators` work-unit name and adds the account type, since Elevators will have one Account transform per account type, see "Account Load Flow" below):
+| Salesforce field | Source | Notes |
+|---|---|---|
+| `RecordTypeId` | `vars.accountRecordTypeId` | From `InitAccountRecordTypeElevators`, see below — **query-based, not hardcoded**: the target record type ("Business Account") is a fixed constant, but its Id is resolved by `DeveloperName` at flow start so it survives a sandbox refresh. Same approach as Petroleum/BiWeeklyPayroll; Jewelry's literal hardcoded Id is a known defect on that work unit, not a pattern to repeat. |
+| `Name` | `name` | |
+| `BillingStreet` | `add1` + `add2` | Same concatenation as every other work unit's `BillingStreet`: `add2` appended with a leading space when non-blank, no PO-Box split (that logic lives on `Address__c`/`Location`, not Account, and hasn't been designed for Elevators yet). |
+| `BillingCity` | `city` | |
+| `BillingStateCode` | `state`, upper-cased | `upper(vars.row.state default "")` — matches the `BillingStateCode` convention all three other units converged on 2026-08-12 (no `stateNames` lookup). |
+| `BillingPostalCode` | `zip`, decimal-stripped and zero-padded | `padZip`, same defensive helper duplicated in every other work unit's Account transform — applied here even though `comp_lic.zip`'s Access-numeric-column risk hasn't been individually confirmed against real data (same "apply defensively, confirm empirically later" posture as the rest of this project). |
+| `Phone` | `phone` | Passed straight through, no formatting. **New** — no other work unit's Account sets `Phone` (Jewelry/Petroleum/BiWeeklyPayroll have no company-level phone source column on their equivalent file; BiWeeklyPayroll's `CompanyTel` goes to the Company **Contact**, not Account). `comp_lic.phone` is a single column, unlike the two-part `area_code`+`telephone` pattern seen on some Contact phone fields elsewhere — nothing to concatenate here. |
+| `Preferred_Method_of_Comm__c` | — | Hardcoded `"Mail"` — same as all three other work units. |
+| `Conversion_Identifier__c` | — | Hardcoded **`"R1.1 - Conversion"`** — **not** `"R1-Conversion"`, which is what Jewelry/Petroleum/BiWeeklyPayroll use. Confirmed deliberate (2026-10-06): Elevators gets its own conversion-identifier value, distinct from the other three work units' shared one. |
+| `OwnerId` | — | `vars.ownerId`, same as every other pre-create transform project-wide. |
+
+`DBA_Name__c`, `Business_Entity_Type__c`, `Federal_Tax_ID__c`, `SicDesc` are not populated — `comp_lic` has no equivalent source columns (same "leave unset, not null" treatment Petroleum gives its own absent Account fields).
+
+**`InitAccountRecordTypeElevators` sub-flow** (Studio-only, no `.dwl` file — same shape as Petroleum's/BiWeeklyPayroll's):
+```
+Salesforce Query: SELECT Id FROM RecordType WHERE SobjectType = 'Account' AND DeveloperName = 'Business_Account'
+Set Variable: accountRecordTypeId = #[payload[0].Id]
+```
+Run once at flow start, same `Business_Account` `DeveloperName` as the other three units (confirmed stable across refreshes already, no reason to expect Elevators differs).
+
+**Not yet designed**: ~~the per-row `Set Variable: row = payload` / main `For Each` wiring~~ (designed 2026-10-14, see "Account Load Flow" below), any row-filter equivalent to Jewelry's `jobno`-prefix check or Petroleum's `licenseno`-validity check (comp_lic's `status` column may be relevant — not yet discussed), and what business-key field (`co_license_no`? `recnumb`?) will eventually key a Jewelry/Petroleum-style register once BLA is designed — deliberately not decided yet, since the cross-table join-key question is still open (see Open items below) and Account itself doesn't need one. **Not yet built/tested in Studio.**
+
+### Account Load Flow — one sub-flow per account type, selected at runtime (designed 2026-10-14)
+
+Elevators will create Accounts from **more than one source table**, each a different kind of Account: the first set comes from `comp_lic` (installer/maintenance companies, mapping above); elevator owners (`company`) will follow later, mapping not yet provided. Each account type gets **its own sub-flow**, and which one runs is chosen at runtime from the trigger file — the same dispatch-by-name pattern as `JewelryUpdates` (section 13), not a `Choice`.
+
+**Trigger — `LoadReadyFlagElevators.csv`**: Directory `C:\data\`, File Name Pattern `LoadReadyFlagElevators.csv`, Min Size `1`, polling interval `10` seconds. Like `JewelryUpdatesTrigger.csv` (and unlike Jewelry/Petroleum's sentinel-only `LoadReadyFlag*.csv`), its **content matters**: one row, one column, `accountType`, whose value is the **exact name of the sub-flow to invoke**:
+
+| `accountType` value | Source CSV | Account transform | Status |
+|---|---|---|---|
+| `LoadElevatorsCompLic` | `comp_lic.csv` | `transform-account-elevators-comp-lic.dwl` | Designed (2026-10-14) |
+| `LoadElevatorsOwner` (proposed name) | `company.csv` | `transform-account-elevators-company.dwl` (proposed name) | Mapping not yet provided |
+
+Naming convention: prefix every account-type sub-flow `LoadElevators<Type>`, so the trigger value is self-documenting. Adding a new account type later = a new sub-flow with a matching name + its own Account transform; the main flow never changes.
+
+**What lives where**: the main flow only does the things every account type shares — trigger read, run-level init (`accountRecordTypeId`), the dispatch, and the end-of-run log write. **Each account-type sub-flow owns everything specific to its source**: its own `File Read` of its source CSV, its own `For Each`, its own Account transform, and (later) whatever downstream objects that account type needs — so owner Accounts and comp_lic Accounts can grow different downstream chains without touching each other.
+
+**Main flow — `LoadElevators`**:
+```
+On New or Updated File (C:\data\, LoadReadyFlagElevators.csv)
+  → Logger: "LoadElevators process starting"
+  → File Read: C:\data\LoadReadyFlagElevators.csv (MIME Type tab: application/csv, header = true)
+  → Set Variable: accountType = #[payload[0].accountType]
+  → Flow Reference: InitAccountRecordTypeElevators   (sets vars.accountRecordTypeId, see Account mapping above)
+  → Try
+      → Flow Reference: #[vars.accountType]   (dynamic — Name field set to this expression, not a literal)
+     On Error Continue (Any):
+      → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+            jobno: null, object: "LoadElevators", status: "Failed - accountType sub-flow error",
+            salesforce_id: null, error_code: null,
+            error_message: "accountType: " ++ (vars.accountType default "") ++ " - " ++ (error.description default "")
+        }]
+  → Flow Reference: CleanupElevators
+```
+**`Try` scope caveat**: unlike `JewelryUpdates`, the `On Error Continue` here catches *any* error raised inside the called sub-flow, not only an unknown `accountType` name — e.g. a missing `comp_lic.csv` would also land here. That's why the status reads `"Failed - accountType sub-flow error"` rather than `"Skipped - Unknown updateType"`; `error.description` distinguishes the two cases in the log. Per-row Salesforce failures never reach this handler — they come back in the Create response and go through the Result & Log Pattern as usual.
+
+**`LoadElevatorsCompLic` sub-flow**:
+```
+→ File Read: C:\data\comp_lic.csv (MIME Type tab: application/csv, header = true — the combine-export
+  writes it with a header row, unlike the raw .unl reads)
+→ Set Variable: compLicRows = payload
+→ For Each (Collection: #[vars.compLicRows])
+    → Set Variable: row = payload
+    → Set Variable: accountId = #[null]   (reset per row so a failed Create can't inherit the previous row's Id)
+    → Transform Message (transform-account-elevators-comp-lic.dwl)
+    → Salesforce Create Account (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+      object: "Account (comp_lic)"; sets accountId] (jobno slot in logEntries = vars.row.co_license_no)
+    → (later: Choice When #[vars.accountId != null] → downstream comp_lic objects, same outer-gate
+      convention as section 6)
+```
+The `object` value carries the account type (`"Account (comp_lic)"`, later `"Account (owner)"`) so a single log can't be misread if both types are ever run against the same sandbox.
+
+**`CleanupElevators` sub-flow** — same shape as `CleanupPetroleum`, minus file archiving:
+```
+→ Set Variable: logFilename = #["C:\data\import_log_elevators_" ++ (now() as String {format: 'yyyyMMdd_HHmm'}) ++ ".csv"]
+→ File Write: #[vars.logFilename], content =
+  #[((vars.logEntries default []) map (e) -> e ++ {SandboxName: "dp04", SFUserName: "Andrew", WorkUnit: "Elevators - " ++ (vars.accountType default "")}) as CSV]
+```
+`comp_lic.csv`/`company.csv` are **not** moved to `processed\` — unlike Jewelry/Petroleum's source files, these are import-layer outputs that more than one load (and later, other objects) will read, so archiving them after one account type runs would break the next.
+
+**Open for this flow**:
+- **Log key** — `co_license_no` is used for the log's `jobno` slot as a provisional choice (it's the license-number column, the closest thing to Petroleum's `licenseno`); not the same as deciding the business key for downstream objects, which is still open (see Open items).
+- **Row filter** — every `comp_lic` row (Current and Historical) currently becomes an Account. Whether Historical rows, or rows by `status`, should be filtered out is not yet decided.
+- **Owner account type** — waiting on the `company` → Account mapping; until then only `LoadElevatorsCompLic` exists, and a trigger value of `LoadElevatorsOwner` would hit the `Try`'s error handler.
+- **Not yet built/tested in Studio.**
+
 ### Open items
 - **Whether output CSV writes/reads and the audit log also belong under the `Elevator\` subfolder** — only the `.unl` source reads are confirmed to need that path prefix (`FileConfigSourceData` connector, Path = `Elevator\company.unl`); the Flow Structure examples above still show bare `C:\data\...` for `company.csv`/`comp_lic.csv`/etc. and the audit log, unconfirmed either way.
 - **What "private" means** for the `company`/`elevator` split — not yet needed for the import layer, deferred.
-- **Cross-table relationships/join keys** — explicitly deferred by the user (2026-08-24): `recnumb` appears on `elevator`/`payments`/`comp_lic`/`license`/`violation`, `license` additionally has a distinct `recnum` field, and `co_license_no` appears on both `elevator` and `license` — whether these represent one consistent join key or multiple different relationships (e.g. elevator→owner via `recnumb` vs. elevator/license→installer-company via `co_license_no`) is unresolved. Don't assume a join structure without asking.
-- Salesforce object mapping — not started. Given the source data's breadth (companies, owners, elevators, licenses, violations, payments), this will likely need new/different Salesforce objects beyond the BLA/BusinessLicense/Assessment pattern the other three work units share — nothing assumed yet.
+- **Cross-table relationships/join keys** — explicitly deferred by the user (2026-08-24): `recnumb` appears on `elevator`/`payments`/`comp_lic`/`license`/`violation`, `license` additionally has a distinct `recnum` field, and `co_license_no` appears on both `elevator` and `license` — whether these represent one consistent join key or multiple different relationships (e.g. elevator→owner via `recnumb` vs. elevator/license→installer-company via `co_license_no`) is unresolved. Don't assume a join structure without asking. Now also relevant to Account's eventual business-key choice, not just cross-table joins generally.
+- Salesforce object mapping — **in progress, started 2026-10-06**. Account is designed (see above), sourced from `comp_lic`. Everything else (Location/Address/PartyAddress, Contact, BLA/BusinessLicense/Assessment, and whatever `company`/`elevator`/`license`/`payments`/`violation` map to, if anything) is still undesigned — the source data's breadth means this will likely need new/different Salesforce objects beyond the BLA/BusinessLicense/Assessment pattern the other three work units share, nothing assumed yet beyond Account.
 - Decimal-artifact risk (see above) — untested against real data.
 - **Not yet built/tested in Studio at all** — this is `.dwl` transform files + this doc section only so far.
 
