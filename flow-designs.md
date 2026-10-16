@@ -475,6 +475,13 @@ Set Variable: logEntries = (vars.logEntries default []) ++ (vars.<thing>Results 
 })
 ```
 
+**Log key columns — `SourceKeyName` + `SourceKeyVal` (new convention, 2026-10-16; Elevator onward)**: for `ElevatorFlowCompLic` and every flow built after it, the log no longer has a `jobno` column. Each entry instead names the source key it used and that key's value:
+```
+SourceKeyName: "co_license_no",          // literal source column name: "jobno", "co_license_no", "recnumb", ...
+SourceKeyVal: vars.row.co_license_no,     // that column's value for this row
+```
+Column order in the log CSV: `SourceKeyName, SourceKeyVal, object, status, salesforce_id, error_code, error_message` (plus the `SandboxName`/`SFUserName`/`WorkUnit` columns appended at File Write). This makes it explicit which column a given value came from, since flows like Elevator key rows by different columns (`co_license_no`, `recnumb`, ...) rather than one shared `jobno`. Run-level entries not tied to a row (e.g. a caught flow error) use `null` for both. **Jewelry, Petroleum and BiWeeklyPayroll are unchanged** — their existing flows keep `jobno`/`licenseno`/`RID` in the first column, so the templates above still show `jobno`. The Postgres `import_log` table (see DDL below) still has a `jobno` column, so new-style log CSVs won't map onto it as-is; add `SourceKeyName`/`SourceKeyVal` columns before importing them.
+
 ### Dependency Rules (gate downstream Creates with a Choice on the parent's Id)
 - **BLA required for**: Business License, Assessment, Assessment Question Response, and (later) Invoice → Invoice Line/Payment. If BLA fails, skip all of these for that row.
 - **Location required for**: Address__c, PartyAddress__c — gated per location item (Location is a batch create of 1-2 items; one can fail while the other succeeds).
@@ -2622,12 +2629,13 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
               → Flow Reference: AddAccountElevatorCompLic
                   → Transform Message (transform-account-elevator-comp-lic.dwl)
                   → Salesforce Create Account (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
-                    object: "Account"; sets accountId] (jobno slot in logEntries = vars.row.co_license_no)
+                    object: "Account"; sets accountId] (SourceKeyName: "co_license_no", SourceKeyVal: vars.row.co_license_no)
               → (later: Choice When #[vars.accountId != null] → downstream comp_lic objects, same outer-gate
                 convention as section 6)
           Otherwise:
               → Set Variable: logEntries = (vars.logEntries default []) ++ [{
-                    jobno: vars.row.co_license_no, object: "Account", status: "Skipped - Status Not A",
+                    SourceKeyName: "co_license_no", SourceKeyVal: vars.row.co_license_no,
+                    object: "Account", status: "Skipped - Status Not A",
                     salesforce_id: null, error_code: null,
                     error_message: "comp_lic status: " ++ (vars.row.status default "")
                 }]
@@ -2647,7 +2655,7 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
 **Shared sub-flow names across flow files**: Mule flow/sub-flow names are app-wide, not per file. `InitAccountRecordTypeElevator` is defined once (in this flow file); a later Elevator flow file should `Flow Reference` it, not define its own copy (duplicate names fail at deploy). Per-source sub-flows carry the source in their name (`AddAccountElevatorCompLic`, `CleanupElevatorCompLic`) so they can't collide.
 
 **Open for this flow**:
-- **Log key** — `co_license_no` is used for the log's `jobno` slot as a provisional choice (the license-number column, closest to Petroleum's `licenseno`); not the same as deciding the business key for downstream objects, which is still open (see Open items).
+- **Log key** — `co_license_no` is used as the log's `SourceKeyName`/`SourceKeyVal` as a provisional choice (the license-number column, closest to Petroleum's `licenseno`); not the same as deciding the business key for downstream objects, which is still open (see Open items).
 - **Not yet built/tested in Studio.**
 
 ### Open items
