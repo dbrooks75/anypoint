@@ -2620,7 +2620,12 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
   → File Read: C:\data\comp_lic.csv (MIME Type tab: application/csv, header = true; separator/quote left
     at defaults — the combine-export writes a normal comma-delimited, quoted CSV with a header row, unlike
     the raw .unl reads; path must match AddCompLicFiles' File Write, see Open items re: Elevator\ subfolder)
-  → Set Variable: compLicRows = payload
+  → Set Variable: compLicRows = #[output application/java --- payload]
+    (NOT plain #[payload] — confirmed in Studio 2026-10-16: the File Read's payload is still CSV-typed, and For Each
+    over it ran once with the whole list as a single item, so vars.row came out as [ {...}, ... ] and
+    vars.row.status as a list. Converting to a Java list here makes For Each iterate row by row. Other
+    work units never hit this because a Transform Message with output application/java sits between
+    their File Read and Set Variable.)
   → For Each (Collection: #[vars.compLicRows])
       → Set Variable: row = payload
       → Set Variable: accountId = #[null]   (reset per row so a failed Create can't inherit the previous row's Id)
