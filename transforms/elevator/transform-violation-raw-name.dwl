@@ -1,7 +1,7 @@
 %dw 2.0
 output application/java
 
-// Reused for both of Elevators' violation source files: violation.unl (Current),
+// Reused for both of Elevator's violation source files: violation.unl (Current),
 // hist_viol.unl (Historical). vars.sourceFileType must be set to "Current"/"Historical"
 // before each call, same pattern as transform-laborstd-raw-name.dwl.
 // No input directive here (corrected 2026-08-25) -- the File Read component's own MIME

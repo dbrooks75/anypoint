@@ -1,12 +1,12 @@
 %dw 2.0
 output application/java
 
-// Elevators' own "payments" table (invoices + payments received against them) — reused for
+// Elevator's own "payments" table (invoices + payments received against them) — reused for
 // both source files: payments.unl (Current), hi_payments.unl (Historical). vars.sourceFileType
 // must be set to "Current"/"Historical" before each call. Named
 // transform-elevator-payments-raw-name.dwl (not transform-payments-raw-name.dwl) to avoid
 // confusion with this project's existing singular transform-payment.dwl/-petroleum.dwl
-// (Jewelry/Petroleum's Payment__c create transforms) — this is an unrelated Elevators-specific
+// (Jewelry/Petroleum's Payment__c create transforms) — this is an unrelated Elevator-specific
 // raw source table, plural naming intentional (matches the actual source table name).
 // No input directive here (corrected 2026-08-25) -- the File Read component's own MIME
 // Type tab (application/csv, quote=NUL, separator=|, header=false) parses the raw .unl

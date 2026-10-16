@@ -1,13 +1,13 @@
 %dw 2.0
 output application/java
 
-// Elevators' own "license" table (individual mechanic licenses) — used only for license.unl
+// Elevator's own "license" table (individual mechanic licenses) — used only for license.unl
 // (Current); hi_license.unl (Historical) has a different 32-column layout (missing
 // "license_ai") and its own dedicated transform, transform-elevator-license-historical-raw-name.dwl
 // (confirmed 2026-08-26). Named transform-elevator-license-raw-name.dwl (not
 // transform-license-raw-name.dwl) to avoid confusion with this project's existing "license"
 // terminology (BusinessLicense/RegulatoryAuthorization, vars.licenseTypeId) on the
-// Jewelry/Petroleum/BiWeeklyPayroll side — this is an unrelated Elevators-specific object.
+// Jewelry/Petroleum/BiWeeklyPayroll side — this is an unrelated Elevator-specific object.
 // Note: this table has BOTH "recnum" and "recnumb" as separate columns (confirmed 2026-08-24)
 // — unlike comp_lic, which only has recnumb.
 // No input directive here (corrected 2026-08-25) -- the File Read component's own MIME

@@ -1,7 +1,7 @@
 %dw 2.0
 output application/java
 
-// Reused for all three of Elevators' elevator source files: elevator.unl (Current),
+// Reused for all three of Elevator's elevator source files: elevator.unl (Current),
 // his_elev.unl (Historical), hi_elevator_pr.unl (Private) — confirmed 2026-08-24 all three
 // share this same 72-column layout. vars.sourceFileType must be set to "Current"/"Historical"/
 // "Private" before each call, same pattern as transform-laborstd-raw-name.dwl.

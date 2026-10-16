@@ -1,7 +1,7 @@
 %dw 2.0
 output application/csv header=true, quoteValues=true
 
-// Elevators' classification lookup table — elev_class (single-letter code) / elev_desc
+// Elevator's classification lookup table — elev_class (single-letter code) / elev_desc
 // (description). Single source file, classification.unl, no Current/Historical/Private split
 // and no SourceFileType needed (confirmed 2026-08-24) — unlike the other six entities, this
 // transform goes straight from raw .unl to the final CSV in one step since there's nothing to
