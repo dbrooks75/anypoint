@@ -480,7 +480,7 @@ Set Variable: logEntries = (vars.logEntries default []) ++ (vars.<thing>Results 
 SourceKeyName: "co_license_no",          // literal source column name: "jobno", "co_license_no", "recnumb", ...
 SourceKeyVal: vars.row.co_license_no,     // that column's value for this row
 ```
-Column order in the log CSV: `SourceKeyName, SourceKeyVal, object, status, salesforce_id, error_code, error_message` (plus the `SandboxName`/`SFUserName`/`WorkUnit` columns appended at File Write). This makes it explicit which column a given value came from, since flows like Elevator key rows by different columns (`co_license_no`, `recnumb`, ...) rather than one shared `jobno`. Run-level entries not tied to a row (e.g. a caught flow error) use `null` for both. **Jewelry, Petroleum and BiWeeklyPayroll are unchanged** — their existing flows keep `jobno`/`licenseno`/`RID` in the first column, so the templates above still show `jobno`. The Postgres `import_log` table (see DDL below) still has a `jobno` column, so new-style log CSVs won't map onto it as-is; add `SourceKeyName`/`SourceKeyVal` columns before importing them.
+Column order in the log CSV: `SourceKeyName, SourceKeyVal, object, status, salesforce_id, error_code, error_message` (plus the `SandboxName`/`SFUserName`/`WorkUnit` columns appended at File Write). This makes it explicit which column a given value came from, since flows like Elevator key rows by different columns (`co_license_no`, `recnumb`, ...) rather than one shared `jobno`. Run-level entries not tied to a row (e.g. a caught flow error) use `null` for both. **Jewelry, Petroleum and BiWeeklyPayroll are unchanged** — their existing flows keep `jobno`/`licenseno`/`RID` in the first column, so the templates above still show `jobno`. (The Postgres `import_log` table isn't in use — the JDBC connector was never installed — so the log CSV is the only record; if that table is ever revived, its `jobno` column would need replacing with these two.)
 
 ### Dependency Rules (gate downstream Creates with a Choice on the parent's Id)
 - **BLA required for**: Business License, Assessment, Assessment Question Response, and (later) Invoice → Invoice Line/Payment. If BLA fails, skip all of these for that row.
@@ -2616,7 +2616,7 @@ Flow: ElevatorFlowCompLic
 On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
   → Logger: "ElevatorFlowCompLic process starting"
   → Flow Reference: InitAccountRecordTypeElevator   (sets vars.accountRecordTypeId, see Account mapping above)
-  → (vars.ownerId — set the same way as the other work units' flows)
+  → Flow Reference: InitOwnerIdElevator   (sets vars.ownerId, see below)
   → File Read: C:\data\comp_lic.csv (MIME Type tab: application/csv, header = true; separator/quote left
     at defaults — the combine-export writes a normal comma-delimited, quoted CSV with a header row, unlike
     the raw .unl reads; path must match AddCompLicFiles' File Write, see Open items re: Elevator\ subfolder)
@@ -2641,6 +2641,13 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
                 }]
   → Flow Reference: CleanupElevatorCompLic
 ```
+
+**`InitOwnerIdElevator` sub-flow** (Studio-only, built by the user 2026-10-16) — resolves `vars.ownerId` by user name, so it survives a sandbox refresh the same way the record type lookup does:
+```
+Salesforce Query: SELECT Id FROM User WHERE Name = 'DLT Licensing System'
+Set Variable: ownerId = #[payload[0].Id]
+```
+Use `payload[0].Id`, not `payload.Id`: the query returns a list, and `.Id` on a list gives back a list of Ids (`["005..."]`), which would fail as an `OwnerId` value. Defined once in this flow file; later Elevator flow files `Flow Reference` it rather than redefining it.
 
 **Status gate (confirmed 2026-10-16)**: `comp_lic.status` has two values, `A` (Active) and `I` (Inactive). An Account is created only for Active rows (`status = "A"`), regardless of `SourceFileType` (Current or Historical). Inactive rows, and any row with an unexpected or blank status, are skipped and logged as `"Skipped - Status Not A"`, with the actual status value in `error_message` so the skip reasons can be tallied from the log. The comparison is exact and case-sensitive. That's safe because the import layer already trims every field, but if real data turns up a lowercase `a`, switch the test to `upper(...)`.
 
