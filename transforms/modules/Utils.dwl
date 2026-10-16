@@ -1,0 +1,80 @@
+%dw 2.0
+
+// Shared helper functions, imported by transforms instead of copying the helper into each one.
+// In Studio this file lives at src/main/resources/modules/Utils.dwl; import it under a transform's
+// %dw 2.0 line with:
+//     import * from modules::Utils                  (everything)
+//     import padZip, properCase from modules::Utils  (just what's needed)
+// Uses core functions only (no extra imports) — same caution as elsewhere on this project about
+// less-common stdlib functions not resolving in Studio (see the some/every issues).
+// Started with Elevator (2026-10-16); Jewelry/Petroleum/BiWeeklyPayroll still carry their own copies.
+
+// Strips an Access-exported decimal artifact: "12345.0" -> "12345".
+fun stripDecimal(v) = (v default "" splitBy ".")[0]
+
+// zip is an Access-exported numeric column, same leading-zero-loss/trailing-".0" risk as
+// elsewhere on this project — strip any decimal artifact, then zero-pad back to 5 digits
+// (e.g. "2907" -> "02907")
+fun padZip(z) = do {
+    var stripped = (z default "" splitBy ".")[0]
+    var len = sizeOf(stripped)
+    ---
+    if (stripped == "") ""
+    else if (len < 5) ("00000"[0 to (4 - len)] ++ stripped)
+    else stripped
+}
+
+// ---- properCase -------------------------------------------------------------------------------
+// Converts upper-case source text to proper case, word by word (words split on single spaces, so
+// spacing is preserved as-is):
+//     "ACME ELEVATOR CO., INC."   -> "Acme Elevator Co., Inc."
+//     "123 N MAIN ST APT 4B"      -> "123 N Main St Apt 4B"
+//     "O'BRIEN-MCDONALD"          -> "O'Brien-McDonald"
+//     "BANK OF AMERICA"           -> "Bank of America"
+//     "P.O. BOX 12"               -> "P.O. Box 12"
+// Can't tell an acronym from a word ("ABC ELEVATOR" -> "Abc Elevator") — add known acronyms to
+// properCaseUpper. Null -> null.
+
+// Words always kept upper case (compared with punctuation removed, so "LLC." and "(USA)" match)
+var properCaseUpper = ["LLC", "LLP", "PC", "PA", "USA", "US", "PO", "NE", "NW", "SE", "SW",
+                       "II", "III", "IV", "DBA", "RI"]
+
+// Words lower-cased when not the first word
+var properCaseLower = ["of", "and", "the", "at", "for", "in", "on", "by"]
+
+// Upper-cases the first letter, lower-cases the rest; leading punctuation is skipped ("(acme)" -> "(Acme)")
+fun capFirstLetter(w: String): String = do {
+    var m = lower(w) scan /^([^a-z]*)([a-z])(.*)$/
+    ---
+    if (isEmpty(m)) lower(w) else m[0][1] ++ upper(m[0][2]) ++ m[0][3]
+}
+
+// O'Brien / D'Angelo: one letter, apostrophe, then capitalize the next letter ("John's" untouched)
+fun fixApostrophe(w: String): String = do {
+    var m = w scan /^([^A-Za-z]*[A-Za-z]')([a-z])(.*)$/
+    ---
+    if (isEmpty(m)) w else m[0][1] ++ upper(m[0][2]) ++ m[0][3]
+}
+
+// McDonald: capitalize the letter after a leading "Mc" (not "Mac" — would break "Machine")
+fun fixMc(w: String): String = do {
+    var m = w scan /^([^A-Za-z]*Mc)([a-z])(.*)$/
+    ---
+    if (isEmpty(m)) w else m[0][1] ++ upper(m[0][2]) ++ m[0][3]
+}
+
+fun properCaseWord(w: String, isFirst: Boolean): String = do {
+    var letters = upper(w replace /[^A-Za-z]/ with "")
+    ---
+    if (w == "") w
+    else if (properCaseUpper contains letters) upper(w)
+    else if (w matches /^([A-Za-z]\.)+$/) upper(w)                  // initials: P.O., U.S.A.
+    else if (w matches /^\d+(st|nd|rd|th|ST|ND|RD|TH)$/) lower(w)   // ordinals: 2ND -> 2nd
+    else if (w matches /.*\d.*/) upper(w)                            // other numbers/units: 123, 4B, #12A
+    else if ((not isFirst) and (properCaseLower contains lower(w))) lower(w)
+    else ((w splitBy "-") map (part) -> fixMc(fixApostrophe(capFirstLetter(part)))) joinBy "-"
+}
+
+fun properCase(s) =
+    if (s == null) null
+    else ((s splitBy " ") map (w, i) -> properCaseWord(w, i == 0)) joinBy " "

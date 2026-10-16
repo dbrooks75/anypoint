@@ -1,5 +1,7 @@
 # Flow Designs
 
+> **Status (2026-10-16)**: the Jewelry, Petroleum and BiWeeklyPayroll one-time conversions are done and in production. Their load, import, delete and cleanup flows (sections 0–12) are retired and kept here for reference only; the one exception is **`JewelryUpdates`** (section 13), which is still in use for maintaining live Jewelry accounts. Active development is **Elevator** (section 14).
+
 ## 0. Source Data Pipeline (Client Files → Access → CSV Export)
 
 Upstream of every Mule flow in this file: how the client's raw data becomes the CSVs the flows actually read. Two distinct legs, in and out of Access — don't conflate their formats:
@@ -2635,6 +2637,12 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
                   → Transform Message (transform-account-elevator-comp-lic.dwl)
                   → Salesforce Create Account (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
                     object: "Account"; sets accountId] (SourceKeyName: "co_license_no", SourceKeyVal: vars.row.co_license_no)
+                  → Choice
+                      When #[vars.accountId != null]:
+                          → Transform Message (transform-account-status-elevator-comp-lic.dwl)
+                          → Salesforce Create Account_Status__c (Records: #[[payload]]) → [Result & Log
+                            Pattern → logEntries, object: "Account_Status__c"]
+                      Otherwise: (skip — Account failed, Account_Status__c not attempted)
               → (later: Choice When #[vars.accountId != null] → downstream comp_lic objects, same outer-gate
                 convention as section 6)
           Otherwise:
@@ -2646,6 +2654,15 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
                 }]
   → Flow Reference: CleanupElevatorCompLic
 ```
+
+**Account Status (`transform-account-status-elevator-comp-lic.dwl`, 2026-10-16)** — nested in `AddAccountElevatorCompLic`, gated on `vars.accountId != null`, same as the other three work units (section 5). Like BiWeeklyPayroll, the effective date reads straight off the current row; no AR-history join.
+
+| Field | Source |
+|---|---|
+| `Account__c` | `vars.accountId` |
+| `Effective_Date__c` | `comp_lic.date_first_issued`, parsed `Date {format: "M/d/yyyy"}` (confirmed format, 2026-10-16); `null` if blank |
+| `Status__c` | hardcoded `"Active"` — only `status = "A"` rows reach Account creation, so every Account_Status__c here is Active |
+| `OwnerId` | `vars.ownerId` |
 
 **`InitOwnerIdElevator` sub-flow** (Studio-only, built by the user 2026-10-16) — resolves `vars.ownerId` by user name, so it survives a sandbox refresh the same way the record type lookup does:
 ```
@@ -2695,6 +2712,11 @@ CREATE TABLE import_log (
 ---
 
 ## DataWeave Reference
+
+### Shared helper module — `Utils.dwl` (2026-10-16)
+Helper functions used by more than one transform live in one DataWeave module instead of being copied into each transform. Repo: `transforms/modules/Utils.dwl`; Studio: `src/main/resources/modules/Utils.dwl` (one copy serves every flow file in the app). Import under the transform's `%dw 2.0` line — `import * from modules::Utils` or `import padZip, properCase from modules::Utils`. The same import works in an inline Set Variable/Logger expression as long as it has a header: `#[%dw 2.0 import properCase from modules::Utils --- properCase(vars.row.name)]`.
+
+Contents: `stripDecimal`, `padZip` (both identical to the copies elsewhere in the repo), and `properCase` (upper-case → proper case with an always-upper word list, small words lower-cased mid-string, O'/Mc/hyphen handling, digit-bearing words left alone — see the file's comments for examples). Used so far by `transform-account-elevator-comp-lic.dwl` (`padZip`). The retired Jewelry/Petroleum/BiWeeklyPayroll transforms keep their own copies and won't be switched over; `JewelryUpdates`' `transform-payment-note-match.dwl` also keeps its own `stripDecimal`. **`properCase` is not used anywhere yet** — whether Elevator converts case (and on which fields) is undecided. **Not yet tested in Studio.**
 
 ### Gotcha: chained `filter`/`map` can get entangled — wrap `filter` in explicit parens
 Chaining `X filter (row) -> BOOL_EXPR map (row) -> BODY` without wrapping the `filter` call in its own parentheses can, in some cases, cause DataWeave to evaluate the `filter` lambda's `matches`/boolean expression *as part of* the `map` callback's evaluation instead of treating `filter` as a fully-resolved prior step — surfacing as a confusing runtime error like `You called the function 'map' with these arguments: 1: Boolean (true) 2: Function (...)`. The error's stack trace is the tell: it shows `matches` called *from inside* `map`, not before it.
