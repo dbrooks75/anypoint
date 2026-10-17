@@ -1,10 +1,10 @@
 %dw 2.0
 
 // Shared helper functions, imported by transforms instead of copying the helper into each one.
-// In Studio this file lives at src/main/resources/modules/Utils.dwl; import it under a transform's
+// In Studio this file lives at src/main/resources/usermodules/Utils.dwl; import it under a transform's
 // %dw 2.0 line with:
-//     import * from modules::Utils                  (everything)
-//     import padZip, properCase from modules::Utils  (just what's needed)
+//     import * from usermodules::Utils                  (everything)
+//     import padZip, properCase from usermodules::Utils  (just what's needed)
 // Uses core functions only (no extra imports) — same caution as elsewhere on this project about
 // less-common stdlib functions not resolving in Studio (see the some/every issues).
 // Started with Elevator (2026-10-16); Jewelry/Petroleum/BiWeeklyPayroll still carry their own copies.
@@ -22,6 +22,50 @@ fun padZip(z) = do {
     if (stripped == "") ""
     else if (len < 5) ("00000"[0 to (4 - len)] ++ stripped)
     else stripped
+}
+
+// ---- Elevator ---------------------------------------------------------------------------------
+
+// Key for matching a row to company.csv: recnumb (decimal-stripped) + SourceFileType, the same
+// pair the Access export joins on. "" when recnumb is blank, so blank recnumbs never match.
+fun recnumbKey(recnumb, sourceFileType) = do {
+    var r = stripDecimal(recnumb) default ""
+    ---
+    if (r == "") "" else r ++ "|" ++ (sourceFileType default "")
+}
+
+// ---- Mailing / Physical address rules (flow-designs.md section 2, "Mailing / Physical Location Rule") ----
+// Same rules the retired work units duplicated across their Location and Address transforms.
+
+// True if the line is a PO Box; periods stripped first so "P.O. Box" matches too
+fun isPOBox(line) = (lower(line default "") replace "." with "") contains "po box"
+
+// True when the only address line on file is a PO Box (one line populated, the other blank) —
+// no real street address, so no Physical Location gets created
+fun poBoxOnly(add1, add2) = do {
+    var a1 = add1 default ""
+    var a2 = add2 default ""
+    ---
+    ((a1 != "") != (a2 != "")) and (isPOBox(a1) or isPOBox(a2))
+}
+
+// Street for an Address__c of the given type ("Mailing" or "Physical"):
+//   both lines populated, one a PO Box -> PO Box line for Mailing, the other line for Physical
+//   both lines populated, no PO Box    -> both lines joined with a space
+//   one line populated                 -> that line
+fun streetFor(add1, add2, addressType) = do {
+    var a1 = add1 default ""
+    var a2 = add2 default ""
+    var bothPopulated = (a1 != "") and (a2 != "")
+    ---
+    if (bothPopulated and (isPOBox(a1) or isPOBox(a2)))
+        if (addressType == "Mailing")
+            (if (isPOBox(a1)) a1 else a2)
+        else
+            (if (isPOBox(a1)) a2 else a1)
+    else if (bothPopulated) a1 ++ " " ++ a2
+    else if (a1 != "") a1
+    else a2
 }
 
 // ---- properCase -------------------------------------------------------------------------------

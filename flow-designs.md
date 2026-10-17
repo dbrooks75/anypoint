@@ -2628,6 +2628,10 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
     vars.row.status as a list. Converting to a Java list here makes For Each iterate row by row. Other
     work units never hit this because a Transform Message with output application/java sits between
     their File Read and Set Variable.)
+  → File Read: C:\data\company.csv (same connector/MIME settings as comp_lic.csv; path must match
+    AddCompanyFiles' File Write)
+  → Transform Message (transform-company-lookup-elevator.dwl)   (groups company rows by recnumb + SourceFileType)
+  → Set Variable: companyByKey = #[payload]
   → For Each (Collection: #[vars.compLicRows])
       → Set Variable: row = payload
       → Set Variable: accountId = #[null]   (reset per row so a failed Create can't inherit the previous row's Id)
@@ -2643,8 +2647,11 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
                           → Salesforce Create Account_Status__c (Records: #[[payload]]) → [Result & Log
                             Pattern → logEntries, object: "Account_Status__c"]
                       Otherwise: (skip — Account failed, Account_Status__c not attempted)
-              → (later: Choice When #[vars.accountId != null] → downstream comp_lic objects, same outer-gate
-                convention as section 6)
+              → Choice (outer gate — same convention as section 6)
+                  When #[vars.accountId != null]:
+                      → Flow Reference: AddLocationsAndAddressesElevatorCompLic   (see below)
+                      → (later: further downstream comp_lic objects)
+                  Otherwise: (skip — Account failed)
           Otherwise:
               → Set Variable: logEntries = (vars.logEntries default []) ++ [{
                     SourceKeyName: "co_license_no", SourceKeyVal: vars.row.co_license_no,
@@ -2653,9 +2660,21 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
                     error_message: "comp_lic status: " ++ (vars.row.status default "")
                 }]
   → Flow Reference: CleanupElevatorCompLic
+Error Handling (flow-level, on ElevatorFlowCompLic itself):
+  On Error Continue (Type: ANY)
+    → Set Variable: logEntries = (vars.logEntries default []) ++ [{
+          SourceKeyName: "co_license_no", SourceKeyVal: vars.row.co_license_no default null,
+          object: "ElevatorFlowCompLic", status: "Failed - Flow Stopped", salesforce_id: null,
+          error_code: (error.errorType.namespace default "") ++ ":" ++ (error.errorType.identifier default ""),
+          error_message: error.description default ""
+      }]
+    → Logger (Level: ERROR): #["ElevatorFlowCompLic stopped: " ++ (error.description default "")]
+    → Flow Reference: CleanupElevatorCompLic
 ```
 
-**Account Status (`transform-account-status-elevator-comp-lic.dwl`, 2026-10-16)** — nested in `AddAccountElevatorCompLic`, gated on `vars.accountId != null`, same as the other three work units (section 5). Like BiWeeklyPayroll, the effective date reads straight off the current row; no AR-history join.
+**Writing the log when the flow stops (2026-10-17, confirmed working in Studio)** — any error that isn't caught further in (a bad date in a transform, a missing `company.csv`, a Salesforce connection failure) jumps straight to the flow's error handler, skipping `CleanupElevatorCompLic`, so without this the log entries gathered so far were lost. Flow variables survive into the error handler, so it appends one `"Failed - Flow Stopped"` entry (the row being processed when it stopped, plus the Mule error type and description) and then calls the same Cleanup sub-flow to write the log. The log then shows exactly which records were created before the stop — needed before any rerun, since a rerun would create duplicates of those. `SourceKeyVal` is `null` if the flow stopped before the `For Each` started. **`On Error Continue`, not `On Error Propagate`**: with Propagate the trigger file is treated as failed, and the File connector may pick the same `LoadReadyFlagCompLic.csv` up again on the next poll and re-run the whole load (duplicates); Continue ends the run cleanly after the log is written, and the `ERROR`-level Logger keeps the failure visible in the console. **Convention for all new flows**: same handler shape, calling that flow's own Cleanup sub-flow.
+
+**Account Status (`transform-account-status-elevator-comp-lic.dwl`, 2026-10-16, confirmed working in Studio)** — nested in `AddAccountElevatorCompLic`, gated on `vars.accountId != null`, same as the other three work units (section 5). Like BiWeeklyPayroll, the effective date reads straight off the current row; no AR-history join.
 
 | Field | Source |
 |---|---|
@@ -2663,6 +2682,79 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
 | `Effective_Date__c` | `comp_lic.date_first_issued`, parsed `Date {format: "M/d/yyyy"}` (confirmed format, 2026-10-16); `null` if blank |
 | `Status__c` | hardcoded `"Active"` — only `status = "A"` rows reach Account creation, so every Account_Status__c here is Active |
 | `OwnerId` | `vars.ownerId` |
+
+**Location / Address__c / PartyAddress__c (designed 2026-10-16, confirmed working in Studio 2026-10-17)** — `AddLocationsAndAddressesElevatorCompLic`, same Location → Address__c → PartyAddress__c chain and Mailing/Physical rule as the retired work units (section 2's "Mailing / Physical Location Rule": Mailing always; Physical too unless the only address line is a PO Box; when both lines are populated and one is a PO Box, the PO Box line goes to Mailing and the other to Physical). The difference: **the address does not come from `comp_lic`** — it comes from the row's matching **`company.csv`** row.
+
+**Company match**: `comp_lic.recnumb` + `SourceFileType` against `company.recnumb` + `SourceFileType` — the same pair the Access export joins on, per the user (2026-10-16). `recnumb` is decimal-stripped on both sides (`recnumbKey` in `Utils.dwl`). `company.csv` is grouped by that key once, before the `For Each` (`transform-company-lookup-elevator.dwl` → `vars.companyByKey`), so each row is a key lookup, not a scan. A key should hold exactly one company row:
+- **1 match** → Location/Address/PartyAddress built from it.
+- **0 matches** (or blank `recnumb`) → skipped, logged `"Skipped - No company match"`. The Account and Account Status are still created.
+- **2+ matches** → skipped, logged `"Skipped - Multiple company matches"` (shouldn't happen given the export's join, so it's flagged rather than guessed at).
+
+| Object | Field | Source |
+|---|---|---|
+| Location | `LocationType` | `"Business Site"` |
+| | `Name` | `"Mailing"` / `"Physical Location"` |
+| | `Description` | Mailing: `"Elevator Mailing Address for Company License " ++ co_license_no`; Physical: `"Company License Physical Location Address for Company License " ++ co_license_no` (user-specified wording, 2026-10-17) |
+| | `OwnerId` | `vars.ownerId` |
+| Address__c | `AddressType` | `vars.addressType` (`"Mailing"`/`"Physical"`, from `transform-location-results.dwl`, reused) |
+| | `ParentId` | `vars.locationId` |
+| | `Street` | `company.add1`/`add2` via `streetFor` (Utils) — PO Box rule above |
+| | `City` | `company.city` |
+| | `StateCode` | `company.state`, upper-cased (same as Account's `BillingStateCode`) |
+| | `PostalCode` | `padZip(company.zip)` |
+| | `Country` | `"United States"` |
+| PartyAddress__c | `PartyId__c` | `vars.accountId` — **`PartyId__c`, not `PartyId`** as in the retired units' PartyAddress transforms; found in Studio 2026-10-17 |
+| | `AddressId__c` | `vars.addressId` |
+| | `Effective_From__c` | `comp_lic.date_first_issued` (`M/d/yyyy`), as a noon-UTC DateTime — same conversion as Petroleum's; `null` if blank |
+| | `Address_Type__c` | `vars.addressType` |
+| | `Is_Primary__c` | `true` for Mailing |
+| | `OwnerId` | `vars.ownerId` |
+
+Transforms: `transform-location-elevator-comp-lic.dwl`, `transform-address-elevator-comp-lic.dwl`, `transform-partyaddress-elevator-comp-lic.dwl` (new); `transform-location-results.dwl` (common, reused unchanged). The PO Box/street rules moved into `Utils.dwl` (`isPOBox`, `poBoxOnly`, `streetFor`) rather than being duplicated across the Location and Address transforms as before.
+
+```
+Sub-flow: AddLocationsAndAddressesElevatorCompLic
+→ Set Variable: companyMatches =
+    #[%dw 2.0
+      import recnumbKey from usermodules::Utils
+      ---
+      vars.companyByKey[recnumbKey(vars.row.recnumb, vars.row.SourceFileType)] default []]
+→ Choice
+    When #[sizeOf(vars.companyMatches) == 1]:
+        → Set Variable: company = #[vars.companyMatches[0]]
+        → Transform Message (transform-location-elevator-comp-lic.dwl — 1 or 2 items)
+        → Set Variable: locationList = payload
+        → Salesforce Create Location (Records: #[vars.locationList])
+        → Transform Message (transform-location-results.dwl — reused)
+        → Set Variable: locationResults = payload
+        → For Each (Collection: #[vars.locationResults])
+            → Set Variable: locationId = #[payload.locationId]
+            → Set Variable: addressType = #[payload.addressType]
+            → Set Variable: addressId = #[null]
+            → Set Variable: logEntries = (vars.logEntries default []) ++ [{ SourceKeyName: "co_license_no",
+                SourceKeyVal: vars.row.co_license_no, object: "Location", status: if (payload.success) "Success" else "Failed",
+                salesforce_id: vars.locationId, error_code: payload.errorCode, error_message: payload.errorMessage }]
+            → Choice
+                When #[vars.locationId != null]:
+                    → Transform Message (transform-address-elevator-comp-lic.dwl)
+                    → Salesforce Create Address__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+                      object: "Address__c"; sets addressId]
+                    → Choice
+                        When #[vars.addressId != null]:
+                            → Transform Message (transform-partyaddress-elevator-comp-lic.dwl)
+                            → Salesforce Create PartyAddress__c (Records: #[[payload]]) → [Result & Log Pattern
+                              → logEntries, object: "PartyAddress__c"]
+                        Otherwise: (skip — Address failed)
+                Otherwise: (skip — Location failed)
+    When #[sizeOf(vars.companyMatches) == 0]:
+        → Set Variable: logEntries = ... ++ [{ SourceKeyName: "co_license_no", SourceKeyVal: vars.row.co_license_no,
+            object: "Location", status: "Skipped - No company match", salesforce_id: null, error_code: null,
+            error_message: "recnumb: " ++ (vars.row.recnumb default "") ++ ", SourceFileType: " ++ (vars.row.SourceFileType default "") }]
+    Otherwise:
+        → Set Variable: logEntries = ... (same, status: "Skipped - Multiple company matches",
+            error_message also includes sizeOf(vars.companyMatches) as String)
+```
+**Open**: should the Account's `Billing*` address also come from the matched company row instead of `comp_lic`? Kept on `comp_lic` for now (user, 2026-10-16).
 
 **`InitOwnerIdElevator` sub-flow** (Studio-only, built by the user 2026-10-16) — resolves `vars.ownerId` by user name, so it survives a sandbox refresh the same way the record type lookup does:
 ```
@@ -2714,9 +2806,9 @@ CREATE TABLE import_log (
 ## DataWeave Reference
 
 ### Shared helper module — `Utils.dwl` (2026-10-16)
-Helper functions used by more than one transform live in one DataWeave module instead of being copied into each transform. Repo: `transforms/modules/Utils.dwl`; Studio: `src/main/resources/modules/Utils.dwl` (one copy serves every flow file in the app). Import under the transform's `%dw 2.0` line — `import * from modules::Utils` or `import padZip, properCase from modules::Utils`. The same import works in an inline Set Variable/Logger expression as long as it has a header: `#[%dw 2.0 import properCase from modules::Utils --- properCase(vars.row.name)]`.
+Helper functions used by more than one transform live in one DataWeave module instead of being copied into each transform. Repo: `transforms/usermodules/Utils.dwl`; Studio: `src/main/resources/usermodules/Utils.dwl` (one copy serves every flow file in the app). Import under the transform's `%dw 2.0` line — `import * from usermodules::Utils` or `import padZip, properCase from usermodules::Utils`. The same import works in an inline Set Variable/Logger expression as long as it has a header: `#[%dw 2.0 import properCase from usermodules::Utils --- properCase(vars.row.name)]`.
 
-Contents: `stripDecimal`, `padZip` (both identical to the copies elsewhere in the repo), and `properCase` (upper-case → proper case with an always-upper word list, small words lower-cased mid-string, O'/Mc/hyphen handling, digit-bearing words left alone — see the file's comments for examples). Used so far by `transform-account-elevator-comp-lic.dwl` (`padZip`). The retired Jewelry/Petroleum/BiWeeklyPayroll transforms keep their own copies and won't be switched over; `JewelryUpdates`' `transform-payment-note-match.dwl` also keeps its own `stripDecimal`. **`properCase` is not used anywhere yet** — whether Elevator converts case (and on which fields) is undecided. **Not yet tested in Studio.**
+Contents: `stripDecimal`, `padZip` (both identical to the copies elsewhere in the repo), `isPOBox`/`poBoxOnly`/`streetFor` (the Mailing/Physical address rules, added 2026-10-16), `recnumbKey` (Elevator's company-match key), and `properCase` (upper-case → proper case with an always-upper word list, small words lower-cased mid-string, O'/Mc/hyphen handling, digit-bearing words left alone — see the file's comments for examples). Used so far by `transform-account-elevator-comp-lic.dwl` (`padZip`). The retired Jewelry/Petroleum/BiWeeklyPayroll transforms keep their own copies and won't be switched over; `JewelryUpdates`' `transform-payment-note-match.dwl` also keeps its own `stripDecimal`. **`properCase` is not used anywhere yet** — whether Elevator converts case (and on which fields) is undecided. **Confirmed working in Studio (2026-10-17)** via the Location and Address transforms; `properCase` itself still untested.
 
 ### Gotcha: chained `filter`/`map` can get entangled — wrap `filter` in explicit parens
 Chaining `X filter (row) -> BOOL_EXPR map (row) -> BODY` without wrapping the `filter` call in its own parentheses can, in some cases, cause DataWeave to evaluate the `filter` lambda's `matches`/boolean expression *as part of* the `map` callback's evaluation instead of treating `filter` as a fully-resolved prior step — surfacing as a confusing runtime error like `You called the function 'map' with these arguments: 1: Boolean (true) 2: Function (...)`. The error's stack trace is the tell: it shows `matches` called *from inside* `map`, not before it.

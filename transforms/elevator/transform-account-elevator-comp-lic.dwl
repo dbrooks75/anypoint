@@ -1,5 +1,5 @@
 %dw 2.0
-import padZip from modules::Utils
+import padZip from usermodules::Utils
 output application/java
 ---
 {
