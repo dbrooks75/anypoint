@@ -482,7 +482,7 @@ Set Variable: logEntries = (vars.logEntries default []) ++ (vars.<thing>Results 
 SourceKeyName: "co_license_no",          // literal source column name: "jobno", "co_license_no", "recnumb", ...
 SourceKeyVal: vars.row.co_license_no,     // that column's value for this row
 ```
-Column order in the log CSV: `SourceKeyName, SourceKeyVal, object, status, salesforce_id, error_code, error_message` (plus the `SandboxName`/`SFUserName`/`WorkUnit` columns appended at File Write). This makes it explicit which column a given value came from, since flows like Elevator key rows by different columns (`co_license_no`, `recnumb`, ...) rather than one shared `jobno`. Run-level entries not tied to a row (e.g. a caught flow error) use `null` for both. **Jewelry, Petroleum and BiWeeklyPayroll are unchanged** — their existing flows keep `jobno`/`licenseno`/`RID` in the first column, so the templates above still show `jobno`. (The Postgres `import_log` table isn't in use — the JDBC connector was never installed — so the log CSV is the only record; if that table is ever revived, its `jobno` column would need replacing with these two.)
+Column order in the log CSV: `LogSeq, LoggedAt, SourceKeyName, SourceKeyVal, object, status, salesforce_id, error_code, error_message` (plus the `SandboxName`/`SFUserName`/`WorkUnit` columns appended at File Write). **`LogSeq` + `LoggedAt` (2026-10-17)**: every `logEntries` append also carries `LoggedAt: now() as String {format: "yyyy-MM-dd HH:mm:ss"}` — the time that entry was logged, so each row has its own time. `LogSeq` (1, 2, 3, ...) is **not** stored on the entry; the Cleanup File Write numbers the entries as it writes them (`output application/csv quoteValues=true` script, see `CleanupElevatorCompLic`), and moves `LogSeq` and `LoggedAt` to the first two columns regardless of where `LoggedAt` sits in each append (`{LogSeq: i + 1, LoggedAt: e.LoggedAt} ++ (e - "LoggedAt") ++ {...}`), so every row has the same column order — the CSV writer takes its columns from the first row. An append that forgets `LoggedAt` still writes, just with a blank time. This makes it explicit which column a given value came from, since flows like Elevator key rows by different columns (`co_license_no`, `recnumb`, ...) rather than one shared `jobno`. Run-level entries not tied to a row (e.g. a caught flow error) use `null` for both. **Jewelry, Petroleum and BiWeeklyPayroll are unchanged** — their existing flows keep `jobno`/`licenseno`/`RID` in the first column, so the templates above still show `jobno`. (The Postgres `import_log` table isn't in use — the JDBC connector was never installed — so the log CSV is the only record; if that table is ever revived, its `jobno` column would need replacing with these two.)
 
 ### Dependency Rules (gate downstream Creates with a Choice on the parent's Id)
 - **BLA required for**: Business License, Assessment, Assessment Question Response, and (later) Invoice → Invoice Line/Payment. If BLA fails, skip all of these for that row.
@@ -2768,8 +2768,17 @@ Use `payload[0].Id`, not `payload.Id`: the query returns a list, and `.Id` on a 
 **`CleanupElevatorCompLic` sub-flow** — same shape as `CleanupPetroleum`, minus file archiving:
 ```
 → Set Variable: logFilename = #["C:\data\import_log_elevator_complic_" ++ (now() as String {format: 'yyyyMMdd_HHmm'}) ++ ".csv"]
-→ File Write: #[vars.logFilename], content =
-  #[((vars.logEntries default []) map (e) -> e ++ {SandboxName: "dp04", SFUserName: "Andrew", WorkUnit: "Elevator - CompLic"}) as CSV]
+→ File Write: #[vars.logFilename], content (full script in the Content field, same as delete_log.csv):
+    %dw 2.0
+    output application/csv quoteValues=true
+    ---
+    (vars.logEntries default []) map (e, i) ->
+        {LogSeq: i + 1, LoggedAt: e.LoggedAt} ++ (e - "LoggedAt") ++
+        {SandboxName: "dp04", SFUserName: "Andrew", WorkUnit: "Elevator - CompLic"}
+  (**Not `... as CSV`** — that fails in Studio with "unknown class CSV" (confirmed 2026-10-17); `as` only
+  converts to DataWeave types like String/Number, not to a file format. The `output application/csv`
+  line is what makes the result CSV text. Some older sections of this doc still show `as CSV` — treat
+  those as shorthand, not working syntax.)
 ```
 `comp_lic.csv` is **not** moved to `processed\` — unlike Jewelry/Petroleum's source files, the Elevator CSVs are import-layer outputs that other flow files (and later, other objects) will also read.
 
