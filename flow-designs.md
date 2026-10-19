@@ -2649,7 +2649,12 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
                       Otherwise: (skip — Account failed, Account_Status__c not attempted)
               → Choice (outer gate — same convention as section 6)
                   When #[vars.accountId != null]:
-                      → Flow Reference: AddLocationsAndAddressesElevatorCompLic   (see below)
+                      → Flow Reference: ElevatorMatchCompanyCompLic   (sets vars.company, or logs the skip — see below)
+                      → Choice
+                          When #[vars.company != null]:
+                              → Flow Reference: AddLocationsAndAddressesElevatorCompLic   (see below)
+                              → Flow Reference: AddContactElevatorCompLic   (see Contact below)
+                          Otherwise: (skip — no single company match; already logged)
                       → (later: further downstream comp_lic objects)
                   Otherwise: (skip — Account failed)
           Otherwise:
@@ -2713,7 +2718,8 @@ Error Handling (flow-level, on ElevatorFlowCompLic itself):
 Transforms: `transform-location-elevator-comp-lic.dwl`, `transform-address-elevator-comp-lic.dwl`, `transform-partyaddress-elevator-comp-lic.dwl` (new); `transform-location-results.dwl` (common, reused unchanged). The PO Box/street rules moved into `Utils.dwl` (`isPOBox`, `poBoxOnly`, `streetFor`) rather than being duplicated across the Location and Address transforms as before.
 
 ```
-Sub-flow: AddLocationsAndAddressesElevatorCompLic
+Sub-flow: ElevatorMatchCompanyCompLic   (restructured 2026-10-18 — company match moved out of the Locations sub-flow)
+→ Set Variable: company = #[null]   (reset per row)
 → Set Variable: companyMatches =
     #[%dw 2.0
       import recnumbKey from usermodules::Utils
@@ -2722,39 +2728,72 @@ Sub-flow: AddLocationsAndAddressesElevatorCompLic
 → Choice
     When #[sizeOf(vars.companyMatches) == 1]:
         → Set Variable: company = #[vars.companyMatches[0]]
-        → Transform Message (transform-location-elevator-comp-lic.dwl — 1 or 2 items)
-        → Set Variable: locationList = payload
-        → Salesforce Create Location (Records: #[vars.locationList])
-        → Transform Message (transform-location-results.dwl — reused)
-        → Set Variable: locationResults = payload
-        → For Each (Collection: #[vars.locationResults])
-            → Set Variable: locationId = #[payload.locationId]
-            → Set Variable: addressType = #[payload.addressType]
-            → Set Variable: addressId = #[null]
-            → Set Variable: logEntries = (vars.logEntries default []) ++ [{ SourceKeyName: "co_license_no",
-                SourceKeyVal: vars.row.co_license_no, object: "Location", status: if (payload.success) "Success" else "Failed",
-                salesforce_id: vars.locationId, error_code: payload.errorCode, error_message: payload.errorMessage }]
-            → Choice
-                When #[vars.locationId != null]:
-                    → Transform Message (transform-address-elevator-comp-lic.dwl)
-                    → Salesforce Create Address__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
-                      object: "Address__c"; sets addressId]
-                    → Choice
-                        When #[vars.addressId != null]:
-                            → Transform Message (transform-partyaddress-elevator-comp-lic.dwl)
-                            → Salesforce Create PartyAddress__c (Records: #[[payload]]) → [Result & Log Pattern
-                              → logEntries, object: "PartyAddress__c"]
-                        Otherwise: (skip — Address failed)
-                Otherwise: (skip — Location failed)
     When #[sizeOf(vars.companyMatches) == 0]:
         → Set Variable: logEntries = ... ++ [{ SourceKeyName: "co_license_no", SourceKeyVal: vars.row.co_license_no,
-            object: "Location", status: "Skipped - No company match", salesforce_id: null, error_code: null,
+            object: "Company Match", status: "Skipped - No company match", salesforce_id: null, error_code: null,
             error_message: "recnumb: " ++ (vars.row.recnumb default "") ++ ", SourceFileType: " ++ (vars.row.SourceFileType default "") }]
     Otherwise:
         → Set Variable: logEntries = ... (same, status: "Skipped - Multiple company matches",
             error_message also includes sizeOf(vars.companyMatches) as String)
+
+Sub-flow: AddLocationsAndAddressesElevatorCompLic   (only called when vars.company is set)
+    → Transform Message (transform-location-elevator-comp-lic.dwl — 1 or 2 items)
+    → Set Variable: locationList = payload
+    → Salesforce Create Location (Records: #[vars.locationList])
+    → Transform Message (transform-location-results.dwl — reused)
+    → Set Variable: locationResults = payload
+    → For Each (Collection: #[vars.locationResults])
+        → Set Variable: locationId = #[payload.locationId]
+        → Set Variable: addressType = #[payload.addressType]
+        → Set Variable: addressId = #[null]
+        → Set Variable: logEntries = (vars.logEntries default []) ++ [{ SourceKeyName: "co_license_no",
+            SourceKeyVal: vars.row.co_license_no, object: "Location", status: if (payload.success) "Success" else "Failed",
+            salesforce_id: vars.locationId, error_code: payload.errorCode, error_message: payload.errorMessage }]
+        → Choice
+            When #[vars.locationId != null]:
+                → Transform Message (transform-address-elevator-comp-lic.dwl)
+                → Salesforce Create Address__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+                  object: "Address__c"; sets addressId]
+                → Choice
+                    When #[vars.addressId != null]:
+                        → Transform Message (transform-partyaddress-elevator-comp-lic.dwl)
+                        → Salesforce Create PartyAddress__c (Records: #[[payload]]) → [Result & Log Pattern
+                          → logEntries, object: "PartyAddress__c"]
+                    Otherwise: (skip — Address failed)
+            Otherwise: (skip — Location failed)
 ```
 **Open**: should the Account's `Billing*` address also come from the matched company row instead of `comp_lic`? Kept on `comp_lic` for now (user, 2026-10-16).
+
+**Contact (designed 2026-10-18)** — `AddContactElevatorCompLic`, called from the main flow right after `AddLocationsAndAddressesElevatorCompLic`, as a sibling — the same layout as the retired units' `AddLocationsAndAddresses*` / `AddContacts*`. Both run only when `ElevatorMatchCompanyCompLic` found exactly one company row, and both read `vars.company`; the no-match / multiple-match skips are logged once, as `object: "Company Match"`, and mean neither Location nor Contact was created. Contacts are created **only for company rows that match a comp_lic row by recnumb** (+ SourceFileType) — the flow iterates comp_lic, never company, so unmatched company rows produce nothing (user, 2026-10-18). One new Contact per match — **no lookup for an existing Contact** and no AccountContactRelation (user, 2026-10-18), unlike Petroleum's lookup-before-create. No mailing address on the Contact.
+
+| Field | Source |
+|---|---|
+| `FirstName` / `MiddleName` / `LastName` | `company.respparty`, written FIRST LAST, split by `parseName` (Utils): first word, words between, last word. A single word goes to `LastName`, since Salesforce requires `LastName` |
+| `AccountId` | `vars.accountId` |
+| `Title` | hardcoded `"Elevator Service"` |
+| `Phone` | `company.phone` |
+| `Fax` | `company.fax` |
+| `Email` | `company.email` via `cleanEmail` (Utils) — `null` unless it looks like an email address |
+| `OwnerId` | `vars.ownerId` |
+| `TitleType` | **left out for now (open)**: Salesforce returns an invalid-field error for `TitleType` on Contact in dp04. Most likely the integration user has no field-level access to it. Jewelry's Contact set `TitleType: "Other"` |
+
+Transform: `transform-contact-elevator-comp-lic.dwl`. `parseName` and `cleanEmail` were added to `Utils.dwl` (both existed as copies in the retired units).
+
+```
+Sub-flow: AddContactElevatorCompLic
+→ Choice
+    When #[trim(vars.company.respparty default "") != ""]:
+        → Transform Message (transform-contact-elevator-comp-lic.dwl)
+        → Salesforce Create Contact (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+          object: "Contact"; sets contactId]
+    Otherwise:
+        → Set Variable: logEntries = ... ++ [{ LoggedAt, SourceKeyName: "co_license_no", SourceKeyVal: vars.row.co_license_no,
+            object: "Contact", status: "Skipped - No respparty", salesforce_id: null, error_code: null,
+            error_message: "company recnumb: " ++ (vars.company.recnumb default "") }]
+```
+**Confirmed working in Studio (2026-10-19)**, apart from `TitleType` (see open item below). The Create's Records must be `#[[payload]]`. With `#[payload]` it fails with "Cannot coerce Object ... to Array".
+
+**Open — `TitleType` field permission**: setting `TitleType` on the Contact gets an invalid-field error from Salesforce. The field has been taken out of the transform until permissions on it are granted for the user the flow logs in as. Once that's done, add it back with the agreed value (Jewelry used `"Other"`) and retest.
 
 **`InitOwnerIdElevator` sub-flow** (Studio-only, built by the user 2026-10-16) — resolves `vars.ownerId` by user name, so it survives a sandbox refresh the same way the record type lookup does:
 ```
@@ -2785,6 +2824,7 @@ Use `payload[0].Id`, not `payload.Id`: the query returns a list, and `.Id` on a 
 **Shared sub-flow names across flow files**: Mule flow/sub-flow names are app-wide, not per file. `InitAccountRecordTypeElevator` is defined once (in this flow file); a later Elevator flow file should `Flow Reference` it, not define its own copy (duplicate names fail at deploy). Per-source sub-flows carry the source in their name (`AddAccountElevatorCompLic`, `CleanupElevatorCompLic`) so they can't collide.
 
 **Open for this flow**:
+- **Contact `TitleType` permissions** — invalid-field error from Salesforce; need field access granted before it can be set (see Contact above).
 - **Log key** — `co_license_no` is used as the log's `SourceKeyName`/`SourceKeyVal` as a provisional choice (the license-number column, closest to Petroleum's `licenseno`); not the same as deciding the business key for downstream objects, which is still open (see Open items).
 - **Not yet built/tested in Studio.**
 
@@ -2817,7 +2857,7 @@ CREATE TABLE import_log (
 ### Shared helper module — `Utils.dwl` (2026-10-16)
 Helper functions used by more than one transform live in one DataWeave module instead of being copied into each transform. Repo: `transforms/usermodules/Utils.dwl`; Studio: `src/main/resources/usermodules/Utils.dwl` (one copy serves every flow file in the app). Import under the transform's `%dw 2.0` line — `import * from usermodules::Utils` or `import padZip, properCase from usermodules::Utils`. The same import works in an inline Set Variable/Logger expression as long as it has a header: `#[%dw 2.0 import properCase from usermodules::Utils --- properCase(vars.row.name)]`.
 
-Contents: `stripDecimal`, `padZip` (both identical to the copies elsewhere in the repo), `isPOBox`/`poBoxOnly`/`streetFor` (the Mailing/Physical address rules, added 2026-10-16), `recnumbKey` (Elevator's company-match key), and `properCase` (upper-case → proper case with an always-upper word list, small words lower-cased mid-string, O'/Mc/hyphen handling, digit-bearing words left alone — see the file's comments for examples). Used so far by `transform-account-elevator-comp-lic.dwl` (`padZip`). The retired Jewelry/Petroleum/BiWeeklyPayroll transforms keep their own copies and won't be switched over; `JewelryUpdates`' `transform-payment-note-match.dwl` also keeps its own `stripDecimal`. **`properCase` is not used anywhere yet** — whether Elevator converts case (and on which fields) is undecided. **Confirmed working in Studio (2026-10-17)** via the Location and Address transforms; `properCase` itself still untested.
+Contents: `stripDecimal`, `padZip` (both identical to the copies elsewhere in the repo), `isPOBox`/`poBoxOnly`/`streetFor` (the Mailing/Physical address rules, added 2026-10-16), `recnumbKey` (Elevator's company-match key), `parseName`/`cleanEmail` (Contacts, added 2026-10-18), and `properCase` (upper-case → proper case with an always-upper word list, small words lower-cased mid-string, O'/Mc/hyphen handling, digit-bearing words left alone — see the file's comments for examples). Used so far by `transform-account-elevator-comp-lic.dwl` (`padZip`). The retired Jewelry/Petroleum/BiWeeklyPayroll transforms keep their own copies and won't be switched over; `JewelryUpdates`' `transform-payment-note-match.dwl` also keeps its own `stripDecimal`. **`properCase` is not used anywhere yet** — whether Elevator converts case (and on which fields) is undecided. **Confirmed working in Studio (2026-10-17)** via the Location and Address transforms; `properCase` itself still untested.
 
 ### Gotcha: chained `filter`/`map` can get entangled — wrap `filter` in explicit parens
 Chaining `X filter (row) -> BOOL_EXPR map (row) -> BODY` without wrapping the `filter` call in its own parentheses can, in some cases, cause DataWeave to evaluate the `filter` lambda's `matches`/boolean expression *as part of* the `map` callback's evaluation instead of treating `filter` as a fully-resolved prior step — surfacing as a confusing runtime error like `You called the function 'map' with these arguments: 1: Boolean (true) 2: Function (...)`. The error's stack trace is the tell: it shows `matches` called *from inside* `map`, not before it.

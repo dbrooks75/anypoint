@@ -24,6 +24,29 @@ fun padZip(z) = do {
     else stripped
 }
 
+// ---- Contacts ---------------------------------------------------------------------------------
+
+// Splits a "FIRST [MIDDLE...] LAST" name: first word -> firstName, last word -> lastName, any words
+// between -> middleName. A single word goes to lastName (Contact.LastName is required in
+// Salesforce, FirstName isn't). Blank/null -> all null.
+fun parseName(raw) = do {
+    var words = ((raw default "") splitBy " ") filter (w) -> w != ""
+    var count = sizeOf(words)
+    ---
+    {
+        firstName: if (count >= 2) words[0] else null,
+        middleName: if (count >= 3) (words[1 to count - 2] joinBy " ") else null,
+        lastName: if (count >= 1) words[-1] else null
+    }
+}
+
+// Returns the email if it looks like one (something@something.something), otherwise null
+fun cleanEmail(email) = do {
+    var e = trim(email default "")
+    ---
+    if (e matches /^[^\s@]+@[^\s@]+\.[^\s@]+$/) e else null
+}
+
 // ---- Elevator ---------------------------------------------------------------------------------
 
 // Key for matching a row to company.csv: recnumb (decimal-stripped) + SourceFileType, the same
