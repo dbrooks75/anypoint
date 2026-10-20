@@ -2837,12 +2837,48 @@ Sub-flow: InitLicenseTypeElevatorCompLic
 
 Sub-flow: AddBLAElevatorCompLic
 → Set Variable: blaId = #[null]
+→ Set Variable: businessLicenseId = #[null]
 → Transform Message (transform-bla-elevator-comp-lic.dwl)
 → Salesforce Create BusinessLicenseApplication (Records: #[[payload]]) → [Result & Log Pattern →
   logEntries, object: "BusinessLicenseApplication"; sets blaId]
+→ Choice
+    When #[vars.blaId != null]:
+        → Transform Message (transform-business-license-elevator-comp-lic.dwl)
+        → Salesforce Create BusinessLicense (Records: #[[payload]]) → [Result & Log Pattern →
+          logEntries, object: "BusinessLicense"; sets businessLicenseId]
+        → Choice
+            When #[vars.businessLicenseId != null]:
+                → Transform Message (transform-bla-license-update.dwl — shared, unchanged)
+                → Salesforce Update BusinessLicenseApplication (Records: #[[payload]]) → [Result & Log
+                  Pattern → logEntries, object: "BusinessLicenseApplication (LicensePermitNameId)"]
+            Otherwise: (skip — Business License failed, LicensePermitNameId not set)
+    Otherwise: (skip — BLA failed, Business License not attempted)
 ```
+
+**Business License (designed and confirmed 2026-10-20)** — nested in `AddBLAElevatorCompLic`, gated only on the BLA create succeeding: **every BLA gets a Business License, Draft included** (user, 2026-10-20 — unlike Petroleum, which skipped Draft). Then `LicensePermitNameId` on the BLA is Updated to the Business License's Id, same as Jewelry/Petroleum (section 12).
+
+| Field | Source |
+|---|---|
+| `AccountId` | `vars.accountId` |
+| `Business_License_Application__c` | `vars.blaId` |
+| `Name` | `co_license_no` — chosen so it equals `License_Number__c`, a formula: `IF(NOT(ISBLANK(Legacy_License_Number__c)), Legacy_License_Number__c, Identifier)`. `co_license_no` is never blank (user, 2026-10-20), so the formula always returns it |
+| `Legacy_License_Number__c` | `co_license_no` |
+| `RegulatoryAuthorizationTypeId` | `vars.licenseTypeId` (same as the BLA) |
+| `Issue_Date__c` (Date) / `PeriodStart` (DateTime) | `expire_date` minus one year (08/01/2026 → 8/1/2025) |
+| `Expiration_Date__c` / `PeriodEnd` (DateTime) | `expire_date` minus one day (08/01/2026 → 7/31/2026) |
+| `Status` | `"Active"` when `comp_lic.status = "A"` — every row that gets this far |
+| `License_Subtype__c` | **provisional name, not yet in Salesforce — commented out in the transform.** From `license_type`: `1` Full License, `2` Handicap, `3` Material Handling, `4` Material Handling + Handicap, `AI` Authorized Inspector; a trailing `C` (e.g. `3C`) is stripped for now |
+| `OwnerId` | `vars.ownerId` |
+
+`expire_date` looks like `08/01/2026` in the source; `parseDate`'s `M/d/yyyy` pattern reads the leading zeros. DateTimes use the new Utils helper `noonUtc` (Date → noon-UTC DateTime). Transform: `transform-business-license-elevator-comp-lic.dwl`.
+
+**Open questions (Business License)**:
+- **What the `C` suffix on `license_type` means** (e.g. `3C`) — stripped for now (user, 2026-10-20).
+- **`License_Subtype__c`** — field not yet created in Salesforce; the name is provisional. Uncomment the line in the transform once it exists.
+
+**Confirmed working in Studio (2026-10-20)**, including the `LicensePermitNameId` Update on the BLA.
 **Open questions (BLA)**:
-- **What `bill_or_pay` means** (its values and whether "bill" rows should be excluded) — for now every matched row counts as a payment; may be refined later (user, 2026-10-20). `comp_lic_renew` (the company-license renewal fee column) is another possible filter.
+- **Should `B` rows be excluded?** `bill_or_pay` answered (user, 2026-10-20): `B` = billed, not paid; `P` = billed and paid. Every matched row still counts as a payment for now, so a `B`-only license comes out Renewal, and a `B` row with a 2026 `deposit_date` would make it Approved. Filtering to `P` rows would only count actual payments. `comp_lic_renew` (the company-license renewal fee column) is another possible filter.
 - **API name not yet checked** for Fee Payment Required — transform guesses `Fee_Payment_Required__c`. (`ApplicationCategory` and `PaymentDaterec` confirmed by the user, 2026-10-20.)
 - **`AppliedDate` source** — the mapping says `null`, but Salesforce requires `AppliedDate` on BusinessLicenseApplication (user, 2026-10-20), so a null will fail the create. What should it come from? Candidates in `comp_lic`: `date_first_issued`, `date_entered`; or a placeholder like Petroleum's `|1900-01-01T12:00:00Z|`. It's a DateTime, so a real date would use the noon-UTC pattern (`T12:00:00Z`).
 - **Payment Received Date** — the user doesn't see this field on BusinessLicenseApplication in Salesforce (2026-10-20). Left out of the transform until it's found or dropped from the mapping.
@@ -2920,7 +2956,7 @@ CREATE TABLE import_log (
 ### Shared helper module — `Utils.dwl` (2026-10-16)
 Helper functions used by more than one transform live in one DataWeave module instead of being copied into each transform. Repo: `transforms/usermodules/Utils.dwl`; Studio: `src/main/resources/usermodules/Utils.dwl` (one copy serves every flow file in the app). Import under the transform's `%dw 2.0` line — `import * from usermodules::Utils` or `import padZip, properCase from usermodules::Utils`. The same import works in an inline Set Variable/Logger expression as long as it has a header: `#[%dw 2.0 import properCase from usermodules::Utils --- properCase(vars.row.name)]`.
 
-Contents: `stripDecimal`, `padZip` (both identical to the copies elsewhere in the repo), `isPOBox`/`poBoxOnly`/`streetFor` (the Mailing/Physical address rules, added 2026-10-16), `recnumbKey` (Elevator's company-match key), `parseName`/`cleanEmail` (Contacts, added 2026-10-18), `parseDate` (M/d/yyyy string → Date, blank → null; added 2026-10-19 for the BLA), and `properCase` (upper-case → proper case with an always-upper word list, small words lower-cased mid-string, O'/Mc/hyphen handling, digit-bearing words left alone — see the file's comments for examples). Used so far by `transform-account-elevator-comp-lic.dwl` (`padZip`). The retired Jewelry/Petroleum/BiWeeklyPayroll transforms keep their own copies and won't be switched over; `JewelryUpdates`' `transform-payment-note-match.dwl` also keeps its own `stripDecimal`. **`properCase` is not used anywhere yet** — whether Elevator converts case (and on which fields) is undecided. **Confirmed working in Studio (2026-10-17)** via the Location and Address transforms; `properCase` itself still untested.
+Contents: `stripDecimal`, `padZip` (both identical to the copies elsewhere in the repo), `isPOBox`/`poBoxOnly`/`streetFor` (the Mailing/Physical address rules, added 2026-10-16), `recnumbKey` (Elevator's company-match key), `parseName`/`cleanEmail` (Contacts, added 2026-10-18), `parseDate` (M/d/yyyy string → Date, blank → null; added 2026-10-19 for the BLA), `noonUtc` (Date → noon-UTC DateTime; added 2026-10-20 for the Business License), and `properCase` (upper-case → proper case with an always-upper word list, small words lower-cased mid-string, O'/Mc/hyphen handling, digit-bearing words left alone — see the file's comments for examples). Used so far by `transform-account-elevator-comp-lic.dwl` (`padZip`). The retired Jewelry/Petroleum/BiWeeklyPayroll transforms keep their own copies and won't be switched over; `JewelryUpdates`' `transform-payment-note-match.dwl` also keeps its own `stripDecimal`. **`properCase` is not used anywhere yet** — whether Elevator converts case (and on which fields) is undecided. **Confirmed working in Studio (2026-10-17)** via the Location and Address transforms; `properCase` itself still untested.
 
 ### Gotcha: chained `filter`/`map` can get entangled — wrap `filter` in explicit parens
 Chaining `X filter (row) -> BOOL_EXPR map (row) -> BODY` without wrapping the `filter` call in its own parentheses can, in some cases, cause DataWeave to evaluate the `filter` lambda's `matches`/boolean expression *as part of* the `map` callback's evaluation instead of treating `filter` as a fully-resolved prior step — surfacing as a confusing runtime error like `You called the function 'map' with these arguments: 1: Boolean (true) 2: Function (...)`. The error's stack trace is the tell: it shows `matches` called *from inside* `map`, not before it.
