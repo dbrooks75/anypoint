@@ -24,6 +24,9 @@ fun padZip(z) = do {
     else stripped
 }
 
+// Parses an M/d/yyyy date string (the Access export's date format) to a Date; blank/null -> null
+fun parseDate(s) = if ((s default "") != "") (s as String) as Date {format: "M/d/yyyy"} else null
+
 // ---- Contacts ---------------------------------------------------------------------------------
 
 // Splits a "FIRST [MIDDLE...] LAST" name: first word -> firstName, last word -> lastName, any words

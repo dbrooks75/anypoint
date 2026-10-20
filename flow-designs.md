@@ -2619,6 +2619,7 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
   → Logger: "ElevatorFlowCompLic process starting"
   → Flow Reference: InitAccountRecordTypeElevator   (sets vars.accountRecordTypeId, see Account mapping above)
   → Flow Reference: InitOwnerIdElevator   (sets vars.ownerId, see below)
+  → Flow Reference: InitLicenseTypeElevatorCompLic   (sets vars.licenseTypeId, see BLA below)
   → File Read: C:\data\comp_lic.csv (MIME Type tab: application/csv, header = true; separator/quote left
     at defaults — the combine-export writes a normal comma-delimited, quoted CSV with a header row, unlike
     the raw .unl reads; path must match AddCompLicFiles' File Write, see Open items re: Elevator\ subfolder)
@@ -2632,6 +2633,11 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
     AddCompanyFiles' File Write)
   → Transform Message (transform-company-lookup-elevator.dwl)   (groups company rows by recnumb + SourceFileType)
   → Set Variable: companyByKey = #[payload]
+  → File Read: C:\data\payment.csv (same connector/MIME settings as comp_lic.csv)
+  → Set Variable: paymentRows = #[output application/java --- payload]   (Java list, same reason as compLicRows)
+  → Logger: #["payment.csv rows read: " ++ (sizeOf(vars.paymentRows) as String)]
+  → Transform Message (transform-payment-lookup-elevator.dwl)   (groups vars.paymentRows by recnumb + SourceFileType)
+  → Set Variable: paymentsByKey = #[payload]
   → For Each (Collection: #[vars.compLicRows])
       → Set Variable: row = payload
       → Set Variable: accountId = #[null]   (reset per row so a failed Create can't inherit the previous row's Id)
@@ -2655,7 +2661,8 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
                               → Flow Reference: AddLocationsAndAddressesElevatorCompLic   (see below)
                               → Flow Reference: AddContactElevatorCompLic   (see Contact below)
                           Otherwise: (skip — no single company match; already logged)
-                      → (later: further downstream comp_lic objects)
+                      → Flow Reference: AddBLAElevatorCompLic   (see BLA below)
+                      → (later: Business License, Assessment, AQR)
                   Otherwise: (skip — Account failed)
           Otherwise:
               → Set Variable: logEntries = (vars.logEntries default []) ++ [{
@@ -2674,6 +2681,7 @@ Error Handling (flow-level, on ElevatorFlowCompLic itself):
           error_message: error.description default ""
       }]
     → Logger (Level: ERROR): #["ElevatorFlowCompLic stopped: " ++ (error.description default "")]
+    → Set Variable: flowStopped = #[true]   (Cleanup skips the file moves)
     → Flow Reference: CleanupElevatorCompLic
 ```
 
@@ -2795,6 +2803,52 @@ Sub-flow: AddContactElevatorCompLic
 
 **Open — `TitleType` field permission**: setting `TitleType` on the Contact gets an invalid-field error from Salesforce. The field has been taken out of the transform until permissions on it are granted for the user the flow logs in as. Once that's done, add it back with the agreed value (Jewelry used `"Other"`) and retest.
 
+**Business License Application (designed 2026-10-19, confirmed 2026-10-20)** — `AddBLAElevatorCompLic`, called from the main flow after the company-match Choice, gated only on `vars.accountId != null` (it doesn't need a company match; the Site address is just left blank without one). Business License, Assessment and AQR come next, one object at a time, after the BLA is confirmed (user, 2026-10-19).
+
+**Payments**: `payment.csv` (the import layer's payments entity — singular file name) is read once in the main flow and grouped by `recnumb` + `SourceFileType` (`recnumbKey`, the same key as the company match; user, 2026-10-20) → `vars.paymentsByKey`. **Every matched row counts as a payment for now** (user, 2026-10-20 — may be refined later). The date-based rules (2026 check, latest payment) only look at rows with a `deposit_date`.
+
+| Field | Source |
+|---|---|
+| `AccountId` | `vars.accountId` |
+| `Status` | `SourceFileType` Historical → `"Approved"`; Current → `"Approved"` if any payment has a 2026 `deposit_date`, else `"Draft"` |
+| `ApplicationType` | no matched payment row → `"New"`, else `"Renewal"` |
+| `ApplicationCategory` | `"Basic"` (standard field, no `__c`) |
+| `Category` | `"License"` |
+| `AppliedDate` | placeholder `|1900-01-01T12:00:00Z|` for now (user, 2026-10-20) — the field is required; real source is an open question below |
+| Approved Date | `null` (left out of the transform, same result) |
+| `LicenseTypeId` | `vars.licenseTypeId`, from `InitLicenseTypeElevatorCompLic` |
+| Fee Payment Required | `true` |
+| `AmountPaid` | `0` when Status is Draft (same as Petroleum; user, 2026-10-20); otherwise `amtreceived` of the payment with the latest `deposit_date`; `null` with no dated payment |
+| `PaymentDaterec` (Payment Date) | latest `deposit_date`; `null` when Status is Draft |
+| Payment Received Date | same rule as Payment Date — **left out**: field not found on the BLA in Salesforce (open question) |
+| `Trade__c` | `"Elevator"` |
+| `LicensePermitNameId` | not set at create — Updated to the Business License's Id once the BL is built, same as Jewelry/Petroleum (section 12; user, 2026-10-20) |
+| `Description` | `"Legacy co_license_no: " ++ co_license_no` |
+| `SiteStreet`/`SiteCity`/`SiteStateCode`/`SitePostalCode`/`SiteCountryCode` | the Mailing address from the matched company row (`streetFor(..., "Mailing")`, `padZip`, `"US"`); all `null` with no company match |
+| `OwnerId` | `vars.ownerId` |
+
+Transform: `transform-bla-elevator-comp-lic.dwl`. New Utils helper `parseDate` (M/d/yyyy string → Date, blank → null).
+
+```
+Sub-flow: InitLicenseTypeElevatorCompLic
+→ Salesforce Query: SELECT Id FROM RegulatoryAuthorizationType
+      WHERE Name = 'Elevator Service Company Application' AND Application_Type__c = 'Renewal'
+→ Set Variable: licenseTypeId = #[payload[0].Id]
+
+Sub-flow: AddBLAElevatorCompLic
+→ Set Variable: blaId = #[null]
+→ Transform Message (transform-bla-elevator-comp-lic.dwl)
+→ Salesforce Create BusinessLicenseApplication (Records: #[[payload]]) → [Result & Log Pattern →
+  logEntries, object: "BusinessLicenseApplication"; sets blaId]
+```
+**Open questions (BLA)**:
+- **What `bill_or_pay` means** (its values and whether "bill" rows should be excluded) — for now every matched row counts as a payment; may be refined later (user, 2026-10-20). `comp_lic_renew` (the company-license renewal fee column) is another possible filter.
+- **API name not yet checked** for Fee Payment Required — transform guesses `Fee_Payment_Required__c`. (`ApplicationCategory` and `PaymentDaterec` confirmed by the user, 2026-10-20.)
+- **`AppliedDate` source** — the mapping says `null`, but Salesforce requires `AppliedDate` on BusinessLicenseApplication (user, 2026-10-20), so a null will fail the create. What should it come from? Candidates in `comp_lic`: `date_first_issued`, `date_entered`; or a placeholder like Petroleum's `|1900-01-01T12:00:00Z|`. It's a DateTime, so a real date would use the noon-UTC pattern (`T12:00:00Z`).
+- **Payment Received Date** — the user doesn't see this field on BusinessLicenseApplication in Salesforce (2026-10-20). Left out of the transform until it's found or dropped from the mapping.
+
+**Confirmed working in Studio (2026-10-20)**, including `InitLicenseTypeElevatorCompLic` and the payment lookup. `ApplicationCategory` is a standard field (no `__c`).
+
 **`InitOwnerIdElevator` sub-flow** (Studio-only, built by the user 2026-10-16) — resolves `vars.ownerId` by user name, so it survives a sandbox refresh the same way the record type lookup does:
 ```
 Salesforce Query: SELECT Id FROM User WHERE Name = 'DLT Licensing System'
@@ -2819,7 +2873,16 @@ Use `payload[0].Id`, not `payload.Id`: the query returns a list, and `.Id` on a 
   line is what makes the result CSV text. Some older sections of this doc still show `as CSV` — treat
   those as shorthand, not working syntax.)
 ```
-`comp_lic.csv` is **not** moved to `processed\` — unlike Jewelry/Petroleum's source files, the Elevator CSVs are import-layer outputs that other flow files (and later, other objects) will also read.
+**Source files are moved to `processed\` (decided 2026-10-19, replaces the earlier "not moved" note)**: each flow file owns its CSVs, and they won't be reused across Elevator flow files. `CleanupElevatorCompLic` ends with:
+```
+→ Choice
+    When #[not (vars.flowStopped default false)]:
+        → File Move: C:\data\comp_lic.csv → C:\data\processed\   (Overwrite: true)
+        → File Move: C:\data\company.csv  → C:\data\processed\   (Overwrite: true)
+        → File Move: C:\data\payment.csv  → C:\data\processed\   (Overwrite: true)
+    Otherwise: (flow stopped on an error — leave the files in C:\data\ for investigation/rerun)
+```
+The flow error handler calls this same Cleanup, so it first sets `flowStopped = true`; otherwise a failed run would move the files away like a completed one. Every new source file this flow reads gets its own File Move here.
 
 **Shared sub-flow names across flow files**: Mule flow/sub-flow names are app-wide, not per file. `InitAccountRecordTypeElevator` is defined once (in this flow file); a later Elevator flow file should `Flow Reference` it, not define its own copy (duplicate names fail at deploy). Per-source sub-flows carry the source in their name (`AddAccountElevatorCompLic`, `CleanupElevatorCompLic`) so they can't collide.
 
@@ -2857,7 +2920,7 @@ CREATE TABLE import_log (
 ### Shared helper module — `Utils.dwl` (2026-10-16)
 Helper functions used by more than one transform live in one DataWeave module instead of being copied into each transform. Repo: `transforms/usermodules/Utils.dwl`; Studio: `src/main/resources/usermodules/Utils.dwl` (one copy serves every flow file in the app). Import under the transform's `%dw 2.0` line — `import * from usermodules::Utils` or `import padZip, properCase from usermodules::Utils`. The same import works in an inline Set Variable/Logger expression as long as it has a header: `#[%dw 2.0 import properCase from usermodules::Utils --- properCase(vars.row.name)]`.
 
-Contents: `stripDecimal`, `padZip` (both identical to the copies elsewhere in the repo), `isPOBox`/`poBoxOnly`/`streetFor` (the Mailing/Physical address rules, added 2026-10-16), `recnumbKey` (Elevator's company-match key), `parseName`/`cleanEmail` (Contacts, added 2026-10-18), and `properCase` (upper-case → proper case with an always-upper word list, small words lower-cased mid-string, O'/Mc/hyphen handling, digit-bearing words left alone — see the file's comments for examples). Used so far by `transform-account-elevator-comp-lic.dwl` (`padZip`). The retired Jewelry/Petroleum/BiWeeklyPayroll transforms keep their own copies and won't be switched over; `JewelryUpdates`' `transform-payment-note-match.dwl` also keeps its own `stripDecimal`. **`properCase` is not used anywhere yet** — whether Elevator converts case (and on which fields) is undecided. **Confirmed working in Studio (2026-10-17)** via the Location and Address transforms; `properCase` itself still untested.
+Contents: `stripDecimal`, `padZip` (both identical to the copies elsewhere in the repo), `isPOBox`/`poBoxOnly`/`streetFor` (the Mailing/Physical address rules, added 2026-10-16), `recnumbKey` (Elevator's company-match key), `parseName`/`cleanEmail` (Contacts, added 2026-10-18), `parseDate` (M/d/yyyy string → Date, blank → null; added 2026-10-19 for the BLA), and `properCase` (upper-case → proper case with an always-upper word list, small words lower-cased mid-string, O'/Mc/hyphen handling, digit-bearing words left alone — see the file's comments for examples). Used so far by `transform-account-elevator-comp-lic.dwl` (`padZip`). The retired Jewelry/Petroleum/BiWeeklyPayroll transforms keep their own copies and won't be switched over; `JewelryUpdates`' `transform-payment-note-match.dwl` also keeps its own `stripDecimal`. **`properCase` is not used anywhere yet** — whether Elevator converts case (and on which fields) is undecided. **Confirmed working in Studio (2026-10-17)** via the Location and Address transforms; `properCase` itself still untested.
 
 ### Gotcha: chained `filter`/`map` can get entangled — wrap `filter` in explicit parens
 Chaining `X filter (row) -> BOOL_EXPR map (row) -> BODY` without wrapping the `filter` call in its own parentheses can, in some cases, cause DataWeave to evaluate the `filter` lambda's `matches`/boolean expression *as part of* the `map` callback's evaluation instead of treating `filter` as a fully-resolved prior step — surfacing as a confusing runtime error like `You called the function 'map' with these arguments: 1: Boolean (true) 2: Function (...)`. The error's stack trace is the tell: it shows `matches` called *from inside* `map`, not before it.
