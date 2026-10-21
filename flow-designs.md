@@ -2620,6 +2620,7 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
   → Flow Reference: InitAccountRecordTypeElevator   (sets vars.accountRecordTypeId, see Account mapping above)
   → Flow Reference: InitOwnerIdElevator   (sets vars.ownerId, see below)
   → Flow Reference: InitLicenseTypeElevatorCompLic   (sets vars.licenseTypeId, see BLA below)
+  → Flow Reference: InitAssessmentQuestionVersionElevator   (sets vars.aqvMap, see AQR below)
   → File Read: C:\data\comp_lic.csv (MIME Type tab: application/csv, header = true; separator/quote left
     at defaults — the combine-export writes a normal comma-delimited, quoted CSV with a header row, unlike
     the raw .unl reads; path must match AddCompLicFiles' File Write, see Open items re: Elevator\ subfolder)
@@ -2839,6 +2840,7 @@ Sub-flow: AddBLAElevatorCompLic
 → Set Variable: blaId = #[null]
 → Set Variable: businessLicenseId = #[null]
 → Transform Message (transform-bla-elevator-comp-lic.dwl)
+→ Set Variable: blaApplicationType = #[payload.ApplicationType]   (picks the Date App Received question, see AQR)
 → Salesforce Create BusinessLicenseApplication (Records: #[[payload]]) → [Result & Log Pattern →
   logEntries, object: "BusinessLicenseApplication"; sets blaId]
 → Choice
@@ -2856,6 +2858,12 @@ Sub-flow: AddBLAElevatorCompLic
         → Transform Message (transform-assessment-elevator-comp-lic.dwl)
         → Salesforce Create Assessment (Records: #[[payload]]) → [Result & Log Pattern →
           logEntries, object: "Assessment"; sets assessmentId]
+        → Choice
+            When #[vars.assessmentId != null]:
+                → Transform Message (transform-aqr-elevator-comp-lic.dwl — list of 6)
+                → Salesforce Create AssessmentQuestionResponse (Records: #[payload] — already a list)
+                  → [List Result & Log Pattern → logEntries, object: "AssessmentQuestionResponse"]
+            Otherwise: (skip — Assessment failed)
     Otherwise: (skip — BLA failed, Business License/Assessment not attempted)
 ```
 
@@ -2889,6 +2897,36 @@ Sub-flow: AddBLAElevatorCompLic
 | `OwnerId` | `vars.ownerId` |
 
 Transform: `transform-assessment-elevator-comp-lic.dwl`. **Confirmed working in Studio (2026-10-21).**
+
+**Assessment Question Responses (designed and confirmed 2026-10-21)** — after the Assessment, gated on `assessmentId != null`; one Create for all six (list). Questions from Workbench (dp04, 2026-10-21), active versions only:
+
+| Question (Name) | DataType | Answer |
+|---|---|---|
+| ESC Equipment Types | Multiselect (v2) | empty |
+| ESC Equipment Type Other | Text | empty — not in the user's original list of 5; included empty (open question) |
+| ESC Other RI Licenses Held | TextArea | empty |
+| ESC Employee License | TextArea | empty |
+| ESC Owner Experience | TextArea (v3) | empty |
+| ESC Date App Received | Date | `date_first_issued` |
+
+**Two questions are both named "ESC Date App Received"** (same Name, version 1, question text): DeveloperNames `ESC_Date_App_Received` (`0lFcp00000061MPEAY`) and `ESC_Date_Renewal_App_Received` (`0lFcp00000062LhEAI`). The BLA's `ApplicationType` picks one: New → `ESC_Date_App_Received`, Renewal → `ESC_Date_Renewal_App_Received` (user, 2026-10-21). So the AQV lookup is keyed by DeveloperName as well as Name (`transform-aqv-lookup-elevator.dwl`; the shared `transform-aqv-lookup.dwl` is untouched).
+
+```
+Sub-flow: InitAssessmentQuestionVersionElevator
+→ Salesforce Query:
+    SELECT Id, Name, QuestionText, DataType, VersionNumber, AssessmentQuestion.DeveloperName
+    FROM AssessmentQuestionVersion
+    WHERE AssessmentQuestion.DeveloperName LIKE 'ESC_%' AND Status = 'Active'
+    ORDER BY AssessmentQuestion.DeveloperName, VersionNumber
+→ Transform Message (transform-aqv-lookup-elevator.dwl)
+→ Set Variable: aqvMap = #[payload]
+```
+AQR fields: `AssessmentId` = `vars.assessmentId`, `AssessmentQuestionId` = the version's `Id`, `Name` = its `QuestionText`, `DateValue`, `ResponseText`, `OwnerId`. Transform: `transform-aqr-elevator-comp-lic.dwl`. **Confirmed working in Studio (2026-10-21).** First run failed on the date AQR ("required fields missing: Name, AssessmentQuestionId") because the Studio lookup was still the shared Name-only `transform-aqv-lookup.dwl`; switching to `transform-aqv-lookup-elevator.dwl` fixed it. The query does return `AssessmentQuestion.DeveloperName` as a nested object (`{Id: null, type: "AssessmentQuestion", DeveloperName: ...}`).
+
+**Open questions (AQR)**:
+- **ESC Equipment Type Other** — is it needed, and what's its source? Included empty for now (user, 2026-10-21).
+- **Answer sources** — Equipment Types, Other RI Licenses Held, Employee License and Owner Experience are empty for now (user, 2026-10-21).
+- **BLA `Omni_JSON_Data__c`** — the other units filled it with the AQR answer list; Elevator's BLA doesn't set it yet.
 
 **Open questions (Business License)**:
 - **What the `C` suffix on `license_type` means** (e.g. `3C`) — stripped for now (user, 2026-10-20).
