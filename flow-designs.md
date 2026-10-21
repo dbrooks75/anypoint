@@ -2852,7 +2852,11 @@ Sub-flow: AddBLAElevatorCompLic
                 → Salesforce Update BusinessLicenseApplication (Records: #[[payload]]) → [Result & Log
                   Pattern → logEntries, object: "BusinessLicenseApplication (LicensePermitNameId)"]
             Otherwise: (skip — Business License failed, LicensePermitNameId not set)
-    Otherwise: (skip — BLA failed, Business License not attempted)
+        → Set Variable: assessmentId = #[null]
+        → Transform Message (transform-assessment-elevator-comp-lic.dwl)
+        → Salesforce Create Assessment (Records: #[[payload]]) → [Result & Log Pattern →
+          logEntries, object: "Assessment"; sets assessmentId]
+    Otherwise: (skip — BLA failed, Business License/Assessment not attempted)
 ```
 
 **Business License (designed and confirmed 2026-10-20)** — nested in `AddBLAElevatorCompLic`, gated only on the BLA create succeeding: **every BLA gets a Business License, Draft included** (user, 2026-10-20 — unlike Petroleum, which skipped Draft). Then `LicensePermitNameId` on the BLA is Updated to the Business License's Id, same as Jewelry/Petroleum (section 12).
@@ -2871,6 +2875,20 @@ Sub-flow: AddBLAElevatorCompLic
 | `OwnerId` | `vars.ownerId` |
 
 `expire_date` looks like `08/01/2026` in the source; `parseDate`'s `M/d/yyyy` pattern reads the leading zeros. DateTimes use the new Utils helper `noonUtc` (Date → noon-UTC DateTime). Transform: `transform-business-license-elevator-comp-lic.dwl`.
+
+**Assessment (designed and confirmed 2026-10-21)** — same `blaId != null` branch, after the Business License; runs whether or not the Business License succeeded (same as Petroleum).
+
+| Field | Source |
+|---|---|
+| `AccountId` | `vars.accountId` |
+| `BusinessLicenseApplication__c` | `vars.blaId` |
+| `AssessmentStatus` | `"Completed"` |
+| `Name` | `"Universal License Assessment"` |
+| `Type` | `"LicensingAndPermitting"` |
+| `EffectiveDateTime` | `comp_lic.date_first_issued`, noon UTC (user, 2026-10-21) |
+| `OwnerId` | `vars.ownerId` |
+
+Transform: `transform-assessment-elevator-comp-lic.dwl`. **Confirmed working in Studio (2026-10-21).**
 
 **Open questions (Business License)**:
 - **What the `C` suffix on `license_type` means** (e.g. `3C`) — stripped for now (user, 2026-10-20).
