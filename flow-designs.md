@@ -2585,12 +2585,12 @@ Scope reopened by the user, who is now building the Elevator load flow object by
 | Salesforce field | Source | Notes |
 |---|---|---|
 | `RecordTypeId` | `vars.accountRecordTypeId` | From `InitAccountRecordTypeElevator`, see below — **query-based, not hardcoded**: the target record type ("Business Account") is a fixed constant, but its Id is resolved by `DeveloperName` at flow start so it survives a sandbox refresh. Same approach as Petroleum/BiWeeklyPayroll; Jewelry's literal hardcoded Id is a known defect on that work unit, not a pattern to repeat. |
-| `Name` | `name` | |
-| `BillingStreet` | `add1` + `add2` | Same concatenation as every other work unit's `BillingStreet`: `add2` appended with a leading space when non-blank, no PO-Box split (that logic lives on `Address__c`/`Location`, not Account, and hasn't been designed for Elevator yet). |
-| `BillingCity` | `city` | |
-| `BillingStateCode` | `state`, upper-cased | `upper(vars.row.state default "")` — matches the `BillingStateCode` convention all three other units converged on 2026-08-12 (no `stateNames` lookup). |
-| `BillingPostalCode` | `zip`, decimal-stripped and zero-padded | `padZip`, same defensive helper duplicated in every other work unit's Account transform — applied here even though `comp_lic.zip`'s Access-numeric-column risk hasn't been individually confirmed against real data (same "apply defensively, confirm empirically later" posture as the rest of this project). |
-| `Phone` | `phone` | Passed straight through, no formatting. **New** — no other work unit's Account sets `Phone` (Jewelry/Petroleum/BiWeeklyPayroll have no company-level phone source column on their equivalent file; BiWeeklyPayroll's `CompanyTel` goes to the Company **Contact**, not Account). `comp_lic.phone` is a single column, unlike the two-part `area_code`+`telephone` pattern seen on some Contact phone fields elsewhere — nothing to concatenate here. |
+| `Name` | `company.name` (from `comp_lic` until 2026-10-22) | Falls back to `comp_lic.name` when there's no single company match or the company name is blank — Account Name is required |
+| `BillingStreet` | `company.add1` + `company.add2` (from `comp_lic` until 2026-10-22) | Same concatenation as every other work unit's `BillingStreet`: `add2` appended with a leading space when non-blank, no PO-Box split (that logic lives on `Address__c`/`Location`, not Account, and hasn't been designed for Elevator yet). |
+| `BillingCity` | `company.city` | |
+| `BillingStateCode` | `company.state`, upper-cased | `upper(vars.company.state default "")` — matches the `BillingStateCode` convention all three other units converged on 2026-08-12 (no `stateNames` lookup). |
+| `BillingPostalCode` | `company.zip`, decimal-stripped and zero-padded | `padZip`, same defensive helper duplicated in every other work unit's Account transform — applied here even though `comp_lic.zip`'s Access-numeric-column risk hasn't been individually confirmed against real data (same "apply defensively, confirm empirically later" posture as the rest of this project). |
+| `Phone` | `company.phone` (from `comp_lic` until 2026-10-22); null with no company match | Passed straight through, no formatting. **New** — no other work unit's Account sets `Phone` (Jewelry/Petroleum/BiWeeklyPayroll have no company-level phone source column on their equivalent file; BiWeeklyPayroll's `CompanyTel` goes to the Company **Contact**, not Account). `comp_lic.phone` is a single column, unlike the two-part `area_code`+`telephone` pattern seen on some Contact phone fields elsewhere — nothing to concatenate here. |
 | `Preferred_Method_of_Comm__c` | — | Hardcoded `"Mail"` — same as all three other work units. |
 | `Conversion_Identifier__c` | — | Hardcoded **`"R1.1 - Conversion"`** — **not** `"R1-Conversion"`, which is what Jewelry/Petroleum/BiWeeklyPayroll use. Confirmed deliberate (2026-10-06): Elevator gets its own conversion-identifier value, distinct from the other three work units' shared one. |
 | `OwnerId` | — | `vars.ownerId`, same as every other pre-create transform project-wide. |
@@ -2644,6 +2644,8 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
       → Set Variable: accountId = #[null]   (reset per row so a failed Create can't inherit the previous row's Id)
       → Choice
           When #[(vars.row.status default "") == "A"]:
+              → Flow Reference: ElevatorMatchCompanyCompLic   (sets vars.company, or logs the skip — see below;
+                moved ahead of the Account 2026-10-22 so the Account's Billing address can come from it)
               → Flow Reference: AddAccountElevatorCompLic
                   → Transform Message (transform-account-elevator-comp-lic.dwl)
                   → Salesforce Create Account (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
@@ -2656,7 +2658,6 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
                       Otherwise: (skip — Account failed, Account_Status__c not attempted)
               → Choice (outer gate — same convention as section 6)
                   When #[vars.accountId != null]:
-                      → Flow Reference: ElevatorMatchCompanyCompLic   (sets vars.company, or logs the skip — see below)
                       → Choice
                           When #[vars.company != null]:
                               → Flow Reference: AddLocationsAndAddressesElevatorCompLic   (see below)
@@ -2774,7 +2775,7 @@ Sub-flow: AddLocationsAndAddressesElevatorCompLic   (only called when vars.compa
                     Otherwise: (skip — Address failed)
             Otherwise: (skip — Location failed)
 ```
-**Open**: should the Account's `Billing*` address also come from the matched company row instead of `comp_lic`? Kept on `comp_lic` for now (user, 2026-10-16).
+**Account `Name`, `Phone` and `Billing*` address now come from the matched company row** (user, 2026-10-22), not `comp_lic` (Name falls back to `comp_lic.name` without a match). Billing: same `add1` + `add2` concatenation, `upper(state)`, `padZip(zip)`, read from `vars.company`; all null when there was no single company match (the Account is still created). `ElevatorMatchCompanyCompLic` was moved ahead of `AddAccountElevatorCompLic` for this.
 
 **Contact (designed 2026-10-18)** — `AddContactElevatorCompLic`, called from the main flow right after `AddLocationsAndAddressesElevatorCompLic`, as a sibling — the same layout as the retired units' `AddLocationsAndAddresses*` / `AddContacts*`. Both run only when `ElevatorMatchCompanyCompLic` found exactly one company row, and both read `vars.company`; the no-match / multiple-match skips are logged once, as `object: "Company Match"`, and mean neither Location nor Contact was created. Contacts are created **only for company rows that match a comp_lic row by recnumb** (+ SourceFileType) — the flow iterates comp_lic, never company, so unmatched company rows produce nothing (user, 2026-10-18). One new Contact per match — **no lookup for an existing Contact** and no AccountContactRelation (user, 2026-10-18), unlike Petroleum's lookup-before-create. No mailing address on the Contact.
 
@@ -2842,8 +2843,9 @@ Sub-flow: InitLicenseTypeElevatorCompLic
 Sub-flow: AddBLAElevatorCompLic
 → Set Variable: blaId = #[null]
 → Set Variable: businessLicenseId = #[null]
-→ Transform Message (transform-bla-elevator-comp-lic.dwl)
-→ Set Variable: blaApplicationType = #[payload.ApplicationType]   (picks the Date App Received question, see AQR)
+→ Transform Message (transform-aqr-questions-elevator-comp-lic.dwl)   (the six answers, see AQR / Omni JSON below)
+→ Set Variable: aqrQuestions = #[payload]
+→ Transform Message (transform-bla-elevator-comp-lic.dwl)   (reads vars.aqrQuestions for Omni_JSON_Data__c)
 → Salesforce Create BusinessLicenseApplication (Records: #[[payload]]) → [Result & Log Pattern →
   logEntries, object: "BusinessLicenseApplication"; sets blaId]
 → Choice
@@ -2863,7 +2865,7 @@ Sub-flow: AddBLAElevatorCompLic
           logEntries, object: "Assessment"; sets assessmentId]
         → Choice
             When #[vars.assessmentId != null]:
-                → Transform Message (transform-aqr-elevator-comp-lic.dwl — list of 6)
+                → Transform Message (transform-aqr-elevator-comp-lic.dwl — list of 6, mapped from vars.aqrQuestions)
                 → Salesforce Create AssessmentQuestionResponse (Records: #[payload] — already a list)
                   → [List Result & Log Pattern → logEntries, object: "AssessmentQuestionResponse"]
             Otherwise: (skip — Assessment failed)
@@ -2929,7 +2931,12 @@ AQR fields: `AssessmentId` = `vars.assessmentId`, `AssessmentQuestionId` = the v
 **Open questions (AQR)**:
 - **ESC Equipment Type Other** — is it needed, and what's its source? Included empty for now (user, 2026-10-21).
 - **Answer sources** — Equipment Types, Other RI Licenses Held, Employee License and Owner Experience are empty for now (user, 2026-10-21).
-- **BLA `Omni_JSON_Data__c`** — the other units filled it with the AQR answer list; Elevator's BLA doesn't set it yet.
+
+**BLA `Omni_JSON_Data__c` (added 2026-10-22, not yet tested)** — same `AnswerList` JSON as the other work units (section 10). The answers are now worked out once, in a new first step of `AddBLAElevatorCompLic` (`transform-aqr-questions-elevator-comp-lic.dwl` → `vars.aqrQuestions`), before the BLA transform; the BLA transform writes them into `Omni_JSON_Data__c`, and `transform-aqr-elevator-comp-lic.dwl` just maps the same list into the AQR creates.
+- All six questions are in the JSON, empty ones with `value: null`; the date answer is an ISO date string (`"2015-03-01"`).
+- `dataType` comes from the AQV query's `DataType`; `category` is `"General"`, same placeholder as the other units.
+- **Date question choice moved**: it runs before the BLA exists, so it can't read the BLA's `ApplicationType` any more. It uses the same rule directly — Renewal (`ESC_Date_Renewal_App_Received`) when the row has any matched payment.csv rows, else New (`ESC_Date_App_Received`). The `Set Variable: blaApplicationType` step is no longer needed and can be deleted in Studio.
+- No MultiSelect reshaping (the other units' `jsonValue` split on `"; "`): ESC Equipment Types is the only Multiselect question and it's empty. Add it if that question ever gets an answer.
 
 **Invoices (designed 2026-10-21, confirmed working in Studio 2026-10-22)** — Invoice__c only for now; InvoiceLine__c and Payment__c are added after the Invoice is confirmed (user, 2026-10-21). New sub-flow `AddInvoicesElevatorCompLic`, called from the main flow's per-row loop right after `AddBLAElevatorCompLic`, gated on `vars.blaId != null` (moved out of the BLA sub-flow, user 2026-10-21, so that sub-flow stays BLA/License/Assessment only). `blaId` is reset to null at the start of `AddBLAElevatorCompLic`, so a failed BLA can't pass the previous row's Id to the gate. Each account's invoices are still created right after its own BLA, rather than in a separate pass after the main loop like Jewelry/Petroleum.
 
@@ -2981,7 +2988,7 @@ No `OwnerId`: the field doesn't exist on InvoiceLine__c (user, 2026-10-22). Send
 | `PaymentDate__c` | `payrecdate`; blank → 1/1/1900 (draft) |
 | `ReceiptDate__c` | `payrecdate`; blank → 1/1/1900 (user, 2026-10-22) |
 | `Payment_Method__c` | first filled of `check_no` → Check, `moneyord_no` → Money Order, `cashrecpt_no` → Cash, `credit_card` → Credit Card (draft) |
-| `Payment_Status__c` | `bill_or_pay`: `P` → `"Completed"`; `B` or anything else → `"Pending"` (user, 2026-10-22) |
+| `Payment_Status__c` | same rule as `InvoiceStatus__c`: `bill_or_pay` `P` → `"Completed"`; `bill_or_pay` blank and `deposit_date` filled → `"Completed"`; `B` or anything else → `"Pending"` (user, 2026-10-22) |
 | `ReferenceNumber__c` | that check / money order / cash receipt number, decimal-stripped; none for credit card (draft) |
 | `Notes__c` | five lines (user, 2026-10-22): `Location: <location>`, `Deposit Voucher: <deposit_voucher>`, `Deposit Date: <deposit_date>`, `Delinquent: <delinquent>`, `Printed Date: <ltr_printed_date>`; values as in the CSV, blank → label only. Confirmed working (2026-10-22) |
 
@@ -2995,7 +3002,7 @@ B rows still get a Payment__c, with status Pending (user, 2026-10-22).
 | `BusinessLicenseApplication__c` | `vars.blaId` |
 | `DueDate__c` | `deposit_date` (Date) — same as Jewelry/Petroleum, draft |
 | `InvoiceDate__c` | `invoice_date` (Date) — draft |
-| `InvoiceStatus__c` | same rule as Payment__c (user, 2026-10-22): `bill_or_pay` `P` → `"Paid"`; `B` or anything else → `"Sent"` |
+| `InvoiceStatus__c` | `bill_or_pay` `P` → `"Paid"`; `bill_or_pay` blank and `deposit_date` filled → `"Paid"`; `B` or anything else → `"Sent"` (user, 2026-10-22) |
 | `Legacy_Invoice_Number__c` | `invoice_no`, decimal-stripped (user, 2026-10-22) |
 | `OwnerId` | `vars.ownerId` |
 

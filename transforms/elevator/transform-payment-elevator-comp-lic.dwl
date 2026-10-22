@@ -28,6 +28,12 @@ var notes = [
     "Printed Date: " ++ (p.ltr_printed_date default "")
 ] joinBy "\n"
 
+var billOrPay = p.bill_or_pay default ""
+var paymentStatus =
+    if (billOrPay == "P") "Completed"
+    else if (billOrPay == "" and filled(p.deposit_date)) "Completed"
+    else "Pending"
+
 var referenceNumber =
     if (filled(p.check_no)) stripDecimal(p.check_no)
     else if (filled(p.moneyord_no)) stripDecimal(p.moneyord_no)
@@ -41,8 +47,9 @@ var referenceNumber =
     PaymentDate__c: payRecDate,
     ReceiptDate__c: payRecDate,   // user, 2026-10-22
     Payment_Method__c: paymentMethod,
-    // bill_or_pay: P (billed and paid) -> Completed; B (billed, not paid) or anything else -> Pending (user, 2026-10-22)
-    Payment_Status__c: if ((p.bill_or_pay default "") == "P") "Completed" else "Pending",
+    // Same rule as InvoiceStatus__c (user, 2026-10-22): bill_or_pay P -> Completed; blank bill_or_pay with a
+    // deposit_date -> Completed; B (billed, not paid) or anything else -> Pending
+    Payment_Status__c: paymentStatus,
     ReferenceNumber__c: referenceNumber,
     Notes__c: notes
     // OwnerId left out: the field doesn't exist on Payment__c in dp04 (user, 2026-10-22)

@@ -30,6 +30,21 @@ var status =
 
 // PaymentDaterec (and Payment Received Date, once found): max deposit_date, null when Draft
 var paymentDate = if (status == "Draft" or latestPayment == null) null else parseDate(latestPayment.deposit_date)
+
+// Omni_JSON_Data__c: AnswerList JSON built from vars.aqrQuestions (transform-aqr-questions-elevator-comp-lic.dwl,
+// computed before this transform), same shape as the other work units (flow-designs.md section 10).
+// Dates are written as ISO strings ("2015-03-01"); empty answers are included with a null value.
+var omniJsonData = write(
+    { AnswerList: vars.aqrQuestions map (q) -> {
+        value: q.value,
+        dataType: q.dataType,
+        answeredIndex: q.answeredIndex,
+        category: q.category,
+        questionText: q.questionText,
+        versionId: q.versionId
+    }},
+    "application/json"
+)
 ---
 {
     AccountId: vars.accountId,
@@ -51,6 +66,7 @@ var paymentDate = if (status == "Draft" or latestPayment == null) null else pars
     // Payment Received Date (same value as PaymentDaterec) left out: no such field found on the
     // BLA in Salesforce yet (open question)
     Trade__c: "Elevator",
+    Omni_JSON_Data__c: omniJsonData,
     // LicensePermitNameId (lookup to the Business License) is set by an Update after the Business
     // License is created, same as Jewelry/Petroleum (section 12) — not at BLA create
     Description: "Legacy co_license_no: " ++ coLicenseNo,
