@@ -24,6 +24,17 @@ fun padZip(z) = do {
     else stripped
 }
 
+// Left-pads a value with zeros to the given width, after stripping any ".0" export artifact:
+// zeroPad("27", 7) -> "0000027". Longer values are returned unchanged; blank/null -> "".
+fun zeroPad(v, width) = do {
+    var stripped = stripDecimal(v) default ""
+    var len = sizeOf(stripped)
+    ---
+    if (stripped == "") ""
+    else if (len < width) (((1 to (width - len)) map (i) -> "0") joinBy "") ++ stripped
+    else stripped
+}
+
 // Parses an M/d/yyyy date string (the Access export's date format) to a Date; blank/null -> null
 fun parseDate(s) = if ((s default "") != "") (s as String) as Date {format: "M/d/yyyy"} else null
 

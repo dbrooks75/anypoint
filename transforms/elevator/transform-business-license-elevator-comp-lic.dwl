@@ -1,5 +1,5 @@
 %dw 2.0
-import parseDate, noonUtc from usermodules::Utils
+import parseDate, noonUtc, zeroPad from usermodules::Utils
 output application/java
 
 var coLicenseNo = vars.row.co_license_no default ""
@@ -27,9 +27,8 @@ var licenseSubtype = {
 {
     AccountId: vars.accountId,
     Business_License_Application__c: vars.blaId,
-    // Name matches License_Number__c, a formula that shows Legacy_License_Number__c when it's
-    // populated (co_license_no is never blank)
-    Name: coLicenseNo,
+    // "ELEVCOMPLI-" + co_license_no zero-padded to 7 digits, e.g. 27 -> ELEVCOMPLI-0000027 (user, 2026-10-22)
+    Name: "ELEVCOMPLI-" ++ zeroPad(coLicenseNo, 7),
     Legacy_License_Number__c: coLicenseNo,
     RegulatoryAuthorizationTypeId: vars.licenseTypeId,
     Issue_Date__c: issueDate,

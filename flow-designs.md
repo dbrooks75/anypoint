@@ -223,6 +223,25 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
 12. Entity_Identifier__c (child of Account) — added to delete flow. Not created by the Mule load flow at all — it's auto-created by a Salesforce trigger (off Account creation, presumably), so it never appeared anywhere in the load design, but still needs cleanup on delete since it's still a real child record of Account
 13. (Account deletion TBD)
 
+### TODO (2026-10-22, not yet applied in Studio): unlink BLA → Business License before deleting
+The Business License delete keeps failing because the BLA still points at it: `BusinessLicenseApplication.LicensePermitNameId` → Business License (set by the load flows' Update after the License is created), and the License points back via `Business_License_Application__c`. The user was deleting these by hand. Fix — per account, before the Business License delete:
+```
+→ Salesforce Query: SELECT Id FROM BusinessLicenseApplication
+      WHERE AccountId = ':accountId' AND LicensePermitNameId != null
+      (Parameters: #[{accountId: vars.accountId}])
+→ Choice
+    When #[sizeOf(payload default []) > 0]:
+        → Transform Message:
+            %dw 2.0
+            output application/java
+            ---
+            payload map (b) -> { Id: b.Id, fieldsToNull: ["LicensePermitNameId"] }
+        → Salesforce Update (Type: BusinessLicenseApplication, Records: #[payload])
+    Otherwise: (nothing to unlink)
+→ (existing) Business License delete → (existing) BLA delete
+```
+`fieldsToNull` is the SOAP API's way to clear a field; if the connector rejects it, try `{ Id: b.Id, LicensePermitNameId: null }`. If the BLA delete then fails, the License's `Business_License_Application__c` is the other direction to clear (or keep License-before-BLA order).
+
 ### Delete Result & Log Pattern (added 2026-07-22, apply after every Salesforce Delete above)
 Mirrors section 2's Create-side Result & Log Pattern, but Delete's connector response shape was confirmed empirically first rather than assumed — verified in Studio (`Logger: #[payload]` on a real InvoiceLine__c delete) to be:
 ```json
@@ -2869,7 +2888,17 @@ Sub-flow: AddBLAElevatorCompLic
                 → Salesforce Create AssessmentQuestionResponse (Records: #[payload] — already a list)
                   → [List Result & Log Pattern → logEntries, object: "AssessmentQuestionResponse"]
             Otherwise: (skip — Assessment failed)
-    Otherwise: (skip — BLA failed, Business License/Assessment not attempted)
+        → Set Variable: contentNoteId = #[null]
+        → Transform Message (transform-contentnote-elevator-comp-lic.dwl)
+        → Salesforce Create ContentNote (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+          object: "ContentNote"; sets contentNoteId]
+        → Choice
+            When #[vars.contentNoteId != null]:
+                → Transform Message (transform-contentdocumentlink-elevator-comp-lic.dwl)
+                → Salesforce Create ContentDocumentLink (Records: #[[payload]]) → [Result & Log Pattern →
+                  logEntries, object: "ContentDocumentLink"]
+            Otherwise: (skip — ContentNote failed)
+    Otherwise: (skip — BLA failed, Business License/Assessment/ContentNote not attempted)
 ```
 
 **Business License (designed and confirmed 2026-10-20)** — nested in `AddBLAElevatorCompLic`, gated only on the BLA create succeeding: **every BLA gets a Business License, Draft included** (user, 2026-10-20 — unlike Petroleum, which skipped Draft). Then `LicensePermitNameId` on the BLA is Updated to the Business License's Id, same as Jewelry/Petroleum (section 12).
@@ -2878,7 +2907,7 @@ Sub-flow: AddBLAElevatorCompLic
 |---|---|
 | `AccountId` | `vars.accountId` |
 | `Business_License_Application__c` | `vars.blaId` |
-| `Name` | `co_license_no` — chosen so it equals `License_Number__c`, a formula: `IF(NOT(ISBLANK(Legacy_License_Number__c)), Legacy_License_Number__c, Identifier)`. `co_license_no` is never blank (user, 2026-10-20), so the formula always returns it |
+| `Name` | `"ELEVCOMPLI-"` + `co_license_no` zero-padded to 7 digits, e.g. `ELEVCOMPLI-0000027` (user, 2026-10-22; replaces plain `co_license_no`). Uses the new Utils helper `zeroPad`. No longer the same as `License_Number__c`, which still shows `Legacy_License_Number__c` |
 | `Legacy_License_Number__c` | `co_license_no` |
 | `RegulatoryAuthorizationTypeId` | `vars.licenseTypeId` (same as the BLA) |
 | `Issue_Date__c` (Date) / `PeriodStart` (DateTime) | `expire_date` minus one year (08/01/2026 → 8/1/2025) |
@@ -2937,6 +2966,16 @@ AQR fields: `AssessmentId` = `vars.assessmentId`, `AssessmentQuestionId` = the v
 - `dataType` comes from the AQV query's `DataType`; `category` is `"General"`, same placeholder as the other units.
 - **Date question choice moved**: it runs before the BLA exists, so it can't read the BLA's `ApplicationType` any more. It uses the same rule directly — Renewal (`ESC_Date_Renewal_App_Received`) when the row has any matched payment.csv rows, else New (`ESC_Date_App_Received`). The `Set Variable: blaApplicationType` step is no longer needed and can be deleted in Studio.
 - No MultiSelect reshaping (the other units' `jsonValue` split on `"; "`): ESC Equipment Types is the only Multiselect question and it's empty. Add it if that question ever gets an answer.
+
+**ContentNote / ContentDocumentLink (designed 2026-10-22, not yet tested)** — last in `AddBLAElevatorCompLic`'s `blaId != null` branch, after the AQRs; same shape as Petroleum/BiWeeklyPayroll (sections 6, 7). From the mapping spec (BHJ 2026.10.15): one note per BLA, each source field stored as its label, a colon and a space, then the source value if any.
+
+| ContentNote field | Source |
+|---|---|
+| `Title` | `"Service Provider Conversion"` (spec, BHJ 2026.07.07) |
+| `Content` | one `<p>label: value</p>` per `comp_lic` column, in this order: `warning_date_1`, `reason_1`, `warning_date_2`, `reason_2`, `warning_date_3`, `reason_3`, `suspend_date`, `reason_suspend`, `comment`. Label = the column name; blank value → label only. Plain HTML, no Base64 |
+| `OwnerId` | `vars.ownerId` |
+
+ContentDocumentLink: `ContentDocumentId` = `vars.contentNoteId`, `LinkedEntityId` = `vars.blaId`, `ShareType` `"V"`, `Visibility` `"InternalUsers"`. Transforms: `transform-contentnote-elevator-comp-lic.dwl`, `transform-contentdocumentlink-elevator-comp-lic.dwl`.
 
 **Invoices (designed 2026-10-21, confirmed working in Studio 2026-10-22)** — Invoice__c only for now; InvoiceLine__c and Payment__c are added after the Invoice is confirmed (user, 2026-10-21). New sub-flow `AddInvoicesElevatorCompLic`, called from the main flow's per-row loop right after `AddBLAElevatorCompLic`, gated on `vars.blaId != null` (moved out of the BLA sub-flow, user 2026-10-21, so that sub-flow stays BLA/License/Assessment only). `blaId` is reset to null at the start of `AddBLAElevatorCompLic`, so a failed BLA can't pass the previous row's Id to the gate. Each account's invoices are still created right after its own BLA, rather than in a separate pass after the main loop like Jewelry/Petroleum.
 
@@ -3095,7 +3134,7 @@ CREATE TABLE import_log (
 ### Shared helper module — `Utils.dwl` (2026-10-16)
 Helper functions used by more than one transform live in one DataWeave module instead of being copied into each transform. Repo: `transforms/usermodules/Utils.dwl`; Studio: `src/main/resources/usermodules/Utils.dwl` (one copy serves every flow file in the app). Import under the transform's `%dw 2.0` line — `import * from usermodules::Utils` or `import padZip, properCase from usermodules::Utils`. The same import works in an inline Set Variable/Logger expression as long as it has a header: `#[%dw 2.0 import properCase from usermodules::Utils --- properCase(vars.row.name)]`.
 
-Contents: `stripDecimal`, `padZip` (both identical to the copies elsewhere in the repo), `isPOBox`/`poBoxOnly`/`streetFor` (the Mailing/Physical address rules, added 2026-10-16), `recnumbKey` (Elevator's company-match key), `parseName`/`cleanEmail` (Contacts, added 2026-10-18), `parseDate` (M/d/yyyy string → Date, blank → null; added 2026-10-19 for the BLA), `noonUtc` (Date → noon-UTC DateTime; added 2026-10-20 for the Business License), and `properCase` (upper-case → proper case with an always-upper word list, small words lower-cased mid-string, O'/Mc/hyphen handling, digit-bearing words left alone — see the file's comments for examples). Used so far by `transform-account-elevator-comp-lic.dwl` (`padZip`). The retired Jewelry/Petroleum/BiWeeklyPayroll transforms keep their own copies and won't be switched over; `JewelryUpdates`' `transform-payment-note-match.dwl` also keeps its own `stripDecimal`. **`properCase` is not used anywhere yet** — whether Elevator converts case (and on which fields) is undecided. **Confirmed working in Studio (2026-10-17)** via the Location and Address transforms; `properCase` itself still untested.
+Contents: `stripDecimal`, `padZip` (both identical to the copies elsewhere in the repo), `isPOBox`/`poBoxOnly`/`streetFor` (the Mailing/Physical address rules, added 2026-10-16), `recnumbKey` (Elevator's company-match key), `parseName`/`cleanEmail` (Contacts, added 2026-10-18), `parseDate` (M/d/yyyy string → Date, blank → null; added 2026-10-19 for the BLA), `noonUtc` (Date → noon-UTC DateTime; added 2026-10-20 for the Business License), `zeroPad(v, width)` (decimal-strip then left-pad with zeros; added 2026-10-22 for the Business License Name), and `properCase` (upper-case → proper case with an always-upper word list, small words lower-cased mid-string, O'/Mc/hyphen handling, digit-bearing words left alone — see the file's comments for examples). Used so far by `transform-account-elevator-comp-lic.dwl` (`padZip`). The retired Jewelry/Petroleum/BiWeeklyPayroll transforms keep their own copies and won't be switched over; `JewelryUpdates`' `transform-payment-note-match.dwl` also keeps its own `stripDecimal`. **`properCase` is not used anywhere yet** — whether Elevator converts case (and on which fields) is undecided. **Confirmed working in Studio (2026-10-17)** via the Location and Address transforms; `properCase` itself still untested.
 
 ### Gotcha: chained `filter`/`map` can get entangled — wrap `filter` in explicit parens
 Chaining `X filter (row) -> BOOL_EXPR map (row) -> BODY` without wrapping the `filter` call in its own parentheses can, in some cases, cause DataWeave to evaluate the `filter` lambda's `matches`/boolean expression *as part of* the `map` callback's evaluation instead of treating `filter` as a fully-resolved prior step — surfacing as a confusing runtime error like `You called the function 'map' with these arguments: 1: Boolean (true) 2: Function (...)`. The error's stack trace is the tell: it shows `matches` called *from inside* `map`, not before it.
