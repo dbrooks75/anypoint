@@ -2907,7 +2907,7 @@ Sub-flow: AddBLAElevatorCompLic
 |---|---|
 | `AccountId` | `vars.accountId` |
 | `Business_License_Application__c` | `vars.blaId` |
-| `Name` | `"ELEVCOMPLI-"` + `co_license_no` zero-padded to 7 digits, e.g. `ELEVCOMPLI-0000027` (user, 2026-10-22; replaces plain `co_license_no`). Uses the new Utils helper `zeroPad`. No longer the same as `License_Number__c`, which still shows `Legacy_License_Number__c` |
+| `Name` | `"ELEVCOMPLI-"` + `co_license_no` zero-padded to 7 digits, e.g. `ELEVCOMPLI-0000027` (user, 2026-10-22; replaces plain `co_license_no`; confirmed working). Uses the new Utils helper `zeroPad`. No longer the same as `License_Number__c`, which still shows `Legacy_License_Number__c` |
 | `Legacy_License_Number__c` | `co_license_no` |
 | `RegulatoryAuthorizationTypeId` | `vars.licenseTypeId` (same as the BLA) |
 | `Issue_Date__c` (Date) / `PeriodStart` (DateTime) | `expire_date` minus one year (08/01/2026 → 8/1/2025) |
@@ -2961,13 +2961,13 @@ AQR fields: `AssessmentId` = `vars.assessmentId`, `AssessmentQuestionId` = the v
 - **ESC Equipment Type Other** — is it needed, and what's its source? Included empty for now (user, 2026-10-21).
 - **Answer sources** — Equipment Types, Other RI Licenses Held, Employee License and Owner Experience are empty for now (user, 2026-10-21).
 
-**BLA `Omni_JSON_Data__c` (added 2026-10-22, not yet tested)** — same `AnswerList` JSON as the other work units (section 10). The answers are now worked out once, in a new first step of `AddBLAElevatorCompLic` (`transform-aqr-questions-elevator-comp-lic.dwl` → `vars.aqrQuestions`), before the BLA transform; the BLA transform writes them into `Omni_JSON_Data__c`, and `transform-aqr-elevator-comp-lic.dwl` just maps the same list into the AQR creates.
+**BLA `Omni_JSON_Data__c` (added and confirmed working in Studio 2026-10-22)** — same `AnswerList` JSON as the other work units (section 10). The answers are now worked out once, in a new first step of `AddBLAElevatorCompLic` (`transform-aqr-questions-elevator-comp-lic.dwl` → `vars.aqrQuestions`), before the BLA transform; the BLA transform writes them into `Omni_JSON_Data__c`, and `transform-aqr-elevator-comp-lic.dwl` just maps the same list into the AQR creates.
 - All six questions are in the JSON, empty ones with `value: null`; the date answer is an ISO date string (`"2015-03-01"`).
 - `dataType` comes from the AQV query's `DataType`; `category` is `"General"`, same placeholder as the other units.
 - **Date question choice moved**: it runs before the BLA exists, so it can't read the BLA's `ApplicationType` any more. It uses the same rule directly — Renewal (`ESC_Date_Renewal_App_Received`) when the row has any matched payment.csv rows, else New (`ESC_Date_App_Received`). The `Set Variable: blaApplicationType` step is no longer needed and can be deleted in Studio.
 - No MultiSelect reshaping (the other units' `jsonValue` split on `"; "`): ESC Equipment Types is the only Multiselect question and it's empty. Add it if that question ever gets an answer.
 
-**ContentNote / ContentDocumentLink (designed 2026-10-22, not yet tested)** — last in `AddBLAElevatorCompLic`'s `blaId != null` branch, after the AQRs; same shape as Petroleum/BiWeeklyPayroll (sections 6, 7). From the mapping spec (BHJ 2026.10.15): one note per BLA, each source field stored as its label, a colon and a space, then the source value if any.
+**ContentNote / ContentDocumentLink (designed and confirmed working in Studio 2026-10-22)** — last in `AddBLAElevatorCompLic`'s `blaId != null` branch, after the AQRs; same shape as Petroleum/BiWeeklyPayroll (sections 6, 7). From the mapping spec (BHJ 2026.10.15): one note per BLA, each source field stored as its label, a colon and a space, then the source value if any.
 
 | ContentNote field | Source |
 |---|---|
