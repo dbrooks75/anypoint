@@ -2662,8 +2662,11 @@ On New or Updated File (C:\data\, LoadReadyFlagCompLic.csv)
                               → Flow Reference: AddLocationsAndAddressesElevatorCompLic   (see below)
                               → Flow Reference: AddContactElevatorCompLic   (see Contact below)
                           Otherwise: (skip — no single company match; already logged)
-                      → Flow Reference: AddBLAElevatorCompLic   (see BLA below)
-                      → (later: Business License, Assessment, AQR)
+                      → Flow Reference: AddBLAElevatorCompLic   (see BLA below; Business License, Assessment, AQR nested in it)
+                      → Choice
+                          When #[vars.blaId != null]:
+                              → Flow Reference: AddInvoicesElevatorCompLic   (see Invoices below)
+                          Otherwise: (skip — BLA failed, Invoices not attempted)
                   Otherwise: (skip — Account failed)
           Otherwise:
               → Set Variable: logEntries = (vars.logEntries default []) ++ [{
@@ -2927,6 +2930,80 @@ AQR fields: `AssessmentId` = `vars.assessmentId`, `AssessmentQuestionId` = the v
 - **ESC Equipment Type Other** — is it needed, and what's its source? Included empty for now (user, 2026-10-21).
 - **Answer sources** — Equipment Types, Other RI Licenses Held, Employee License and Owner Experience are empty for now (user, 2026-10-21).
 - **BLA `Omni_JSON_Data__c`** — the other units filled it with the AQR answer list; Elevator's BLA doesn't set it yet.
+
+**Invoices (designed 2026-10-21, confirmed working in Studio 2026-10-22)** — Invoice__c only for now; InvoiceLine__c and Payment__c are added after the Invoice is confirmed (user, 2026-10-21). New sub-flow `AddInvoicesElevatorCompLic`, called from the main flow's per-row loop right after `AddBLAElevatorCompLic`, gated on `vars.blaId != null` (moved out of the BLA sub-flow, user 2026-10-21, so that sub-flow stays BLA/License/Assessment only). `blaId` is reset to null at the start of `AddBLAElevatorCompLic`, so a failed BLA can't pass the previous row's Id to the gate. Each account's invoices are still created right after its own BLA, rather than in a separate pass after the main loop like Jewelry/Petroleum.
+
+- **Which rows**: this row's matched `payment.csv` rows (`vars.paymentsByKey`, recnumb + SourceFileType), **minus any row where any column contains "permit", case-insensitive** (user, 2026-10-21). The filter is only on the invoice list; the BLA's Status/ApplicationType/AmountPaid still count every matched row.
+- **Order**: oldest first by `payrecdate` (user, 2026-10-21). A blank `payrecdate` defaults to 1/1/1900 (user, 2026-10-21), so those rows sort first.
+- **Grain**: one Invoice__c per remaining payment row.
+
+```
+Sub-flow: AddInvoicesElevatorCompLic
+→ Transform Message (transform-invoice-payments-elevator-comp-lic.dwl)   (filtered, sorted list for this row)
+→ Set Variable: invoicePayments = #[payload]
+→ For Each (Collection: #[vars.invoicePayments])
+    → Set Variable: paymentRow = #[payload]   (NOT row — vars.row is still the comp_lic row)
+    → Set Variable: invoiceId = #[null]
+    → Transform Message (transform-invoice-elevator-comp-lic.dwl)
+    → Salesforce Create Invoice__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+      object: "Invoice__c"; sets invoiceId] (SourceKeyName: "co_license_no", SourceKeyVal: vars.row.co_license_no)
+    → Choice
+        When #[vars.invoiceId != null]:
+            → Transform Message (transform-invoiceline-elevator-comp-lic.dwl)
+            → Salesforce Create InvoiceLine__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+              object: "InvoiceLine__c"]
+            → Transform Message (transform-payment-elevator-comp-lic.dwl)
+            → Salesforce Create Payment__c (Records: #[[payload]]) → [Result & Log Pattern → logEntries,
+              object: "Payment__c"]
+        Otherwise: (skip — Invoice failed, InvoiceLine/Payment not attempted)
+```
+
+**InvoiceLine__c (designed 2026-10-21, confirmed working in Studio 2026-10-22)** — `transform-invoiceline-elevator-comp-lic.dwl`
+
+| Field | Source |
+|---|---|
+| `Invoice__c` | `vars.invoiceId` |
+| `Quantity__c` | `1` |
+| `LineType__c` | `"Base Fee"` |
+| `ProrateFactor__c` | `100` |
+| `UnitPrice__c` | `amt_billed` (user, 2026-10-22); blank → `0`, same as Petroleum |
+| `Notes__c` | `location` (user, 2026-10-22) |
+
+No `OwnerId`: the field doesn't exist on InvoiceLine__c (user, 2026-10-22). Sending a list-valued field to the Create gives the SOAP error "Unable to find a deserializer for the type common.api.soap.wsdl.QueryResult". (`vars.ownerId` was also a list until `InitOwnerIdElevator` was switched to `payload[0].Id`, user 2026-10-22.)
+
+**Payment__c (designed and confirmed working in Studio 2026-10-22)** — `transform-payment-elevator-comp-lic.dwl`, after the InvoiceLine in the same `invoiceId != null` branch.
+
+| Field | Source |
+|---|---|
+| `BusinessLicenseApplication__c` | `vars.blaId` |
+| `Invoice__c` | `vars.invoiceId` |
+| `Amount__c` | `amtreceived`; blank → `0` (draft) |
+| `PaymentDate__c` | `payrecdate`; blank → 1/1/1900 (draft) |
+| `ReceiptDate__c` | `payrecdate`; blank → 1/1/1900 (user, 2026-10-22) |
+| `Payment_Method__c` | first filled of `check_no` → Check, `moneyord_no` → Money Order, `cashrecpt_no` → Cash, `credit_card` → Credit Card (draft) |
+| `Payment_Status__c` | `bill_or_pay`: `P` → `"Completed"`; `B` or anything else → `"Pending"` (user, 2026-10-22) |
+| `ReferenceNumber__c` | that check / money order / cash receipt number, decimal-stripped; none for credit card (draft) |
+| `Notes__c` | five lines (user, 2026-10-22): `Location: <location>`, `Deposit Voucher: <deposit_voucher>`, `Deposit Date: <deposit_date>`, `Delinquent: <delinquent>`, `Printed Date: <ltr_printed_date>`; values as in the CSV, blank → label only. **Commented out in the transform (user, 2026-10-22)** — see open question |
+
+No `OwnerId` on Payment__c either (user, 2026-10-22). Jewelry and Petroleum did set `OwnerId` on both InvoiceLine__c and Payment__c and those loads worked, so the field apparently existed then (probably the earlier dp02 sandbox) and is gone in dp04 — most likely both are now master-detail children of Invoice__c, which takes away their own owner.
+
+B rows still get a Payment__c, with status Pending (user, 2026-10-22).
+
+| Invoice__c field | Source |
+|---|---|
+| `Account__c` | `vars.accountId` |
+| `BusinessLicenseApplication__c` | `vars.blaId` |
+| `DueDate__c` | `deposit_date` (Date) — same as Jewelry/Petroleum, draft |
+| `InvoiceDate__c` | `invoice_date` (Date) — draft |
+| `InvoiceStatus__c` | same rule as Payment__c (user, 2026-10-22): `bill_or_pay` `P` → `"Paid"`; `B` or anything else → `"Sent"` |
+| `Legacy_Invoice_Number__c` | `invoice_no`, decimal-stripped (user, 2026-10-22) |
+| `OwnerId` | `vars.ownerId` |
+
+**Open questions (Invoices)**:
+- **Date sources** — `invoice_date` for InvoiceDate and `deposit_date` for DueDate are drafts; `payrecdate` is the other candidate.
+- **Cutover "Sent" invoice** for Current accounts (section 4 pattern) — needed? If so it must be created after these, last per BLA.
+- **`payrecdate` format** — assumed `M/d/yyyy`, same as `deposit_date`.
+- **Payment__c `Notes__c`** — the create fails with it set, so it's commented out (user, 2026-10-22). Check field-level security for the integration user first (Petroleum hit the same thing on `Payment__c.Notes__c` in dp02 — masked "Unable to find a deserializer … QueryResult" error, fixed by granting Edit FLS), and whether the field exists in dp04 under that API name.
 
 **Open questions (Business License)**:
 - **What the `C` suffix on `license_type` means** (e.g. `3C`) — stripped for now (user, 2026-10-20).
