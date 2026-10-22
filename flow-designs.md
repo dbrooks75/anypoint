@@ -2983,7 +2983,7 @@ No `OwnerId`: the field doesn't exist on InvoiceLine__c (user, 2026-10-22). Send
 | `Payment_Method__c` | first filled of `check_no` → Check, `moneyord_no` → Money Order, `cashrecpt_no` → Cash, `credit_card` → Credit Card (draft) |
 | `Payment_Status__c` | `bill_or_pay`: `P` → `"Completed"`; `B` or anything else → `"Pending"` (user, 2026-10-22) |
 | `ReferenceNumber__c` | that check / money order / cash receipt number, decimal-stripped; none for credit card (draft) |
-| `Notes__c` | five lines (user, 2026-10-22): `Location: <location>`, `Deposit Voucher: <deposit_voucher>`, `Deposit Date: <deposit_date>`, `Delinquent: <delinquent>`, `Printed Date: <ltr_printed_date>`; values as in the CSV, blank → label only. **Commented out in the transform (user, 2026-10-22)** — see open question |
+| `Notes__c` | five lines (user, 2026-10-22): `Location: <location>`, `Deposit Voucher: <deposit_voucher>`, `Deposit Date: <deposit_date>`, `Delinquent: <delinquent>`, `Printed Date: <ltr_printed_date>`; values as in the CSV, blank → label only. Confirmed working (2026-10-22) |
 
 No `OwnerId` on Payment__c either (user, 2026-10-22). Jewelry and Petroleum did set `OwnerId` on both InvoiceLine__c and Payment__c and those loads worked, so the field apparently existed then (probably the earlier dp02 sandbox) and is gone in dp04 — most likely both are now master-detail children of Invoice__c, which takes away their own owner.
 
@@ -3003,7 +3003,6 @@ B rows still get a Payment__c, with status Pending (user, 2026-10-22).
 - **Date sources** — `invoice_date` for InvoiceDate and `deposit_date` for DueDate are drafts; `payrecdate` is the other candidate.
 - **Cutover "Sent" invoice** for Current accounts (section 4 pattern) — needed? If so it must be created after these, last per BLA.
 - **`payrecdate` format** — assumed `M/d/yyyy`, same as `deposit_date`.
-- **Payment__c `Notes__c`** — the create fails with it set, so it's commented out (user, 2026-10-22). Check field-level security for the integration user first (Petroleum hit the same thing on `Payment__c.Notes__c` in dp02 — masked "Unable to find a deserializer … QueryResult" error, fixed by granting Edit FLS), and whether the field exists in dp04 under that API name.
 
 **Open questions (Business License)**:
 - **What the `C` suffix on `license_type` means** (e.g. `3C`) — stripped for now (user, 2026-10-20).

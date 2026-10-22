@@ -43,7 +43,7 @@ var referenceNumber =
     Payment_Method__c: paymentMethod,
     // bill_or_pay: P (billed and paid) -> Completed; B (billed, not paid) or anything else -> Pending (user, 2026-10-22)
     Payment_Status__c: if ((p.bill_or_pay default "") == "P") "Completed" else "Pending",
-    ReferenceNumber__c: referenceNumber
-    // Notes__c: notes,   commented out (user, 2026-10-22): the create fails with it, open question
+    ReferenceNumber__c: referenceNumber,
+    Notes__c: notes
     // OwnerId left out: the field doesn't exist on Payment__c in dp04 (user, 2026-10-22)
 }
