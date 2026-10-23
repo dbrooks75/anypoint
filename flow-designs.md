@@ -224,23 +224,21 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
 13. (Account deletion TBD)
 
 ### TODO (2026-10-22, not yet applied in Studio): unlink BLA → Business License before deleting
-The Business License delete keeps failing because the BLA still points at it: `BusinessLicenseApplication.LicensePermitNameId` → Business License (set by the load flows' Update after the License is created), and the License points back via `Business_License_Application__c`. The user was deleting these by hand. Fix — per account, before the Business License delete:
+The Business License delete keeps failing because the BLA still points at it: `BusinessLicenseApplication.LicensePermitNameId` → Business License (set by the load flows' Update after the License is created), and the License points back via `Business_License_Application__c`. The user was deleting these by hand. Fix — inside the existing per-BLA gate (non-empty list of Business Licenses for this BLA), right before the Business License delete, where the BLA Id is already known (simplified 2026-10-22: no per-account query needed):
 ```
-→ Salesforce Query: SELECT Id FROM BusinessLicenseApplication
-      WHERE AccountId = ':accountId' AND LicensePermitNameId != null
-      (Parameters: #[{accountId: vars.accountId}])
-→ Choice
-    When #[sizeOf(payload default []) > 0]:
-        → Transform Message:
-            %dw 2.0
-            output application/java
-            ---
-            payload map (b) -> { Id: b.Id, fieldsToNull: ["LicensePermitNameId"] }
-        → Salesforce Update (Type: BusinessLicenseApplication, Records: #[payload])
-    Otherwise: (nothing to unlink)
+→ Transform Message:
+    %dw 2.0
+    output application/java
+    ---
+    { Id: vars.blaId, fieldsToNull: ["LicensePermitNameId"] }
+→ Salesforce Update (Type: BusinessLicenseApplication, Records: #[[payload]])
 → (existing) Business License delete → (existing) BLA delete
 ```
-`fieldsToNull` is the SOAP API's way to clear a field; if the connector rejects it, try `{ Id: b.Id, LicensePermitNameId: null }`. If the BLA delete then fails, the License's `Business_License_Application__c` is the other direction to clear (or keep License-before-BLA order).
+The Update replaces `payload`, so the existing Business License transform (`payload map (item) -> item.Id`) no longer sees the BL query results. This was hit in Studio on 2026-10-22. Fix it one of two ways:
+- Put the Transform and Update before the Business License query. They run for every BLA, and clearing an empty field is harmless.
+- Save the query result first (`Set Variable blList = #[payload]`) and change the transform to `vars.blList map (item) -> item.Id`.
+
+`fieldsToNull` is the SOAP API's way to clear a field; if the connector rejects it, try `{ Id: vars.blaId, LicensePermitNameId: null }`. Use whatever variable the flow already holds the BLA Id in. If the BLA delete then fails, the License's `Business_License_Application__c` is the other direction to clear (or keep License-before-BLA order).
 
 ### Delete Result & Log Pattern (added 2026-07-22, apply after every Salesforce Delete above)
 Mirrors section 2's Create-side Result & Log Pattern, but Delete's connector response shape was confirmed empirically first rather than assumed — verified in Studio (`Logger: #[payload]` on a real InvoiceLine__c delete) to be:
