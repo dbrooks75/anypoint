@@ -223,8 +223,10 @@ On New or Updated File (C:\data\, AccountDeletes.csv)
 12. Entity_Identifier__c (child of Account) — added to delete flow. Not created by the Mule load flow at all — it's auto-created by a Salesforce trigger (off Account creation, presumably), so it never appeared anywhere in the load design, but still needs cleanup on delete since it's still a real child record of Account
 13. (Account deletion TBD)
 
-### TODO (2026-10-22, not yet applied in Studio): unlink BLA → Business License before deleting
-The Business License delete keeps failing because the BLA still points at it: `BusinessLicenseApplication.LicensePermitNameId` → Business License (set by the load flows' Update after the License is created), and the License points back via `Business_License_Application__c`. The user was deleting these by hand. Fix — inside the existing per-BLA gate (non-empty list of Business Licenses for this BLA), right before the Business License delete, where the BLA Id is already known (simplified 2026-10-22: no per-account query needed):
+### Unlink BLA → Business License before deleting (applied in Studio 2026-10-23)
+The Business License delete was failing because the BLA still points at it. `BusinessLicenseApplication.LicensePermitNameId` points to the Business License; the load flows set it with an Update after the License is created. The License points back via `Business_License_Application__c`. The user had been deleting these by hand.
+
+The fix is in the per-BLA loop, where the BLA Id is already known, **before the Business License query**:
 ```
 → Transform Message:
     %dw 2.0
@@ -232,13 +234,16 @@ The Business License delete keeps failing because the BLA still points at it: `B
     ---
     { Id: vars.blaId, fieldsToNull: ["LicensePermitNameId"] }
 → Salesforce Update (Type: BusinessLicenseApplication, Records: #[[payload]])
-→ (existing) Business License delete → (existing) BLA delete
+→ (existing) Business License query → gate: non-empty list
+    → (existing) Business License transform: payload map (item) -> item.Id
+    → (existing) Business License delete
+→ (existing) BLA delete
 ```
-The Update replaces `payload`, so the existing Business License transform (`payload map (item) -> item.Id`) no longer sees the BL query results. This was hit in Studio on 2026-10-22. Fix it one of two ways:
-- Put the Transform and Update before the Business License query. They run for every BLA, and clearing an empty field is harmless.
-- Save the query result first (`Set Variable blList = #[payload]`) and change the transform to `vars.blList map (item) -> item.Id`.
+**Why before the query:** the Update replaces `payload`. Placed inside the gate, right before the delete, it broke the Business License transform (`payload map (item) -> item.Id`); this was hit in Studio on 2026-10-22. Before the query, it runs for every BLA, which is harmless: clearing an empty field changes nothing.
 
-`fieldsToNull` is the SOAP API's way to clear a field; if the connector rejects it, try `{ Id: vars.blaId, LicensePermitNameId: null }`. Use whatever variable the flow already holds the BLA Id in. If the BLA delete then fails, the License's `Business_License_Application__c` is the other direction to clear (or keep License-before-BLA order).
+**Notes:**
+- `fieldsToNull` is the SOAP API's way to clear a field. If the connector ever rejects it, use `{ Id: vars.blaId, LicensePermitNameId: null }`.
+- If the BLA delete fails, the other direction to clear is the License's `Business_License_Application__c`.
 
 ### Delete Result & Log Pattern (added 2026-07-22, apply after every Salesforce Delete above)
 Mirrors section 2's Create-side Result & Log Pattern, but Delete's connector response shape was confirmed empirically first rather than assumed — verified in Studio (`Logger: #[payload]` on a real InvoiceLine__c delete) to be:
